@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: powerpilot-ci-${{ github.workflow }}-${{ github.ref }}
@@ -35,13 +35,50 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install -r requirements.txt
 
+      - name: Resolve build identity
+        id: build
+        shell: pwsh
+        run: |
+          $src = Get-Content app/main.go -Raw
+          if ($src -notmatch 'const appVersion = "([^"]+)"') { throw 'appVersion not found' }
+          $baseVersion = $Matches[1]
+          if ('${{ github.event_name }}' -eq 'push' -and '${{ github.ref }}' -eq 'refs/heads/develop') {
+            $channel = 'develop'
+            $version = "$baseVersion-dev.${{ github.run_number }}"
+          } else {
+            $channel = 'stable'
+            $version = $baseVersion
+          }
+          "channel=$channel" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+
       - name: Build and validate release
+        env:
+          POWERPILOT_CHANNEL: ${{ steps.build.outputs.channel }}
+          POWERPILOT_BUILD_VERSION: ${{ steps.build.outputs.version }}
         run: python build_release.py
 
       - name: Upload validation artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: PowerPilot-CI-${{ github.sha }}
+          name: PowerPilot-${{ steps.build.outputs.version }}-${{ github.sha }}
           path: release/*
           if-no-files-found: error
           retention-days: 7
+
+      - name: Publish rolling develop release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ steps.build.outputs.version }}'
+          $notes = "powerpilot-develop-version: $version`n`nАвтоматическая тестовая сборка ветки develop. Может содержать незавершённые функции."
+          gh release view develop *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh api --method PATCH repos/${{ github.repository }}/git/refs/tags/develop -f sha=${{ github.sha }} -F force=true
+          } else {
+            gh release create develop --prerelease --target '${{ github.sha }}' --title "PowerPilot Develop $version" --notes "$notes"
+          }
+          gh release upload develop release/PowerPilot_Develop_Setup.exe release/PowerPilot_Develop_Portable.exe release/PowerPilot_Develop_Update.zip --clobber
+          gh release edit develop --prerelease --title "PowerPilot Develop $version" --notes "$notes"

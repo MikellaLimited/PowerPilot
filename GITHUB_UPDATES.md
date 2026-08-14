@@ -29,3 +29,9 @@ Each stable release is tagged `vX.Y.Z` and publishes:
 The normal installation path is `%LOCALAPPDATA%\\Programs\\PowerPilot`, so updates usually do not need UAC. If the user installed PowerPilot in a protected folder such as Program Files, the updater asks for elevation only for the file replacement step.
 
 No GitHub personal access token is embedded in PowerPilot. The repository and stable release assets must remain publicly readable for token-free update checks.
+
+## Develop channel
+
+Pushes to the `develop` branch publish a rolling prerelease under the fixed `develop` tag. Its public installer is `PowerPilot_Develop_Setup.exe`; the installed application checks `/releases/tags/develop` and downloads `PowerPilot_Develop_Update.zip` instead of the latest stable release.
+
+Develop builds use versions such as `0.8.2-dev.42`, where the final number is the GitHub Actions run number. Stable builds never read the develop release, and develop builds never switch themselves back to the stable channel. Installing the develop package over an existing PowerPilot installation replaces that installation; the channels are not installed side by side.

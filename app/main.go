@@ -3381,7 +3381,7 @@ func drawSettingsPage(hdc uintptr, body RECT, w int) {
 		d2dResetTransform()
 	}
 	versionY := int(body.Bottom) - 28
-	drawText(hdc, "PowerPilot "+appVersion, int(body.Left)+20, versionY, int(body.Right-body.Left)-40, 20, 11, 550, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "PowerPilot "+currentPowerPilotVersion(), int(body.Left)+20, versionY, int(body.Right-body.Left)-40, 20, 11, 550, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 	if app.confirmClearHistory {
 		drawHistoryClearConfirmation(hdc, body)
 	}
