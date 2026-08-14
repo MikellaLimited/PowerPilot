@@ -1,4 +1,4 @@
-PowerPilot third-party notice
+PowerPilot 0.6.13 third-party notice
 
 LibreHardwareMonitor
 - Project: LibreHardwareMonitor/LibreHardwareMonitor

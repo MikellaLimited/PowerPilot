@@ -1,0 +1,26 @@
+PowerPilot 0.4.0 — Automation Workbench
+
+Major features
+- Autosaves the unfinished current task to draft.json and restores it on restart.
+- Crash recovery: detects an interrupted active schedule and offers to resume it.
+- Single-instance protection: a second launch activates the existing PowerPilot window.
+- Undo/Redo for task editing (Ctrl+Z / Ctrl+Y) with an editor history.
+- Copy, duplicate and paste individual condition/action blocks between advanced tasks.
+- Copy/paste entire groups of conditions or steps between advanced tasks.
+- Six ready-to-edit advanced-task templates.
+- Read-only block-scheme preview with live execution state colours.
+- Step-by-step Dry Run controls (restart / next block / show all) without executing real system actions.
+- Validation before saving, including missing parameters, grouping errors and simple impossible AND constraints.
+- New advanced conditions: window exists, window closed, active window, window-title match and audio silence.
+- Audio-silence condition can monitor the entire default output or the audio session of a selected process.
+- New actions: display off/on, set system volume, mute/unmute.
+- Technical rotating log: %AppData%/PowerPilot/PowerPilot.log, accessible from Settings > Data.
+- Mini mode can be Always on Top and can independently show task, countdown, current step and metrics.
+- Interface scale: 90%, 100%, 110% or 125%; Direct2D content, input controls and minimum window geometry scale together.
+
+Reliability / UX
+- Draft and active-session state is written atomically where appropriate.
+- Saved-task validation is applied to both current and saved-task editors.
+- Advanced editor toolbar now includes Undo, Redo, Templates and Preview.
+- Technical log rotates at roughly 2 MiB.
+- Release binaries remain stripped (-s -w -trimpath).

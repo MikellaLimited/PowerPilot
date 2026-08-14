@@ -1,0 +1,30 @@
+PowerPilot 0.6.17 — нативное обновление датчиков и скрытый collector без терминала
+
+Исправления температурного модуля:
+1. Удалён PowerShell-транзакционный updater температур. Ручная установка/обновление датчиков теперь запускает повышенную копию самого PowerPilot через UAC и выполняет распаковку, сборку, проверку и переключение провайдера нативно.
+2. Добавлен sensor_update_result.json с точным этапом и ошибкой elevated-helper. UI больше не должен сводить любую ошибку обновления к одному «exit status 1».
+3. LibreHardwareMonitor разворачивается side-by-side в новую versioned runtime-папку. Старый runtime не перезаписывается и остаётся доступен для rollback.
+4. Новый runtime сначала проверяется однократным --once запуском PowerPilotSensors.exe. Переключение Task Scheduler выполняется только после валидного collector_status.json и хотя бы одного температурного датчика.
+5. После регистрации нового задания PowerPilot ждёт свежие sensors.json/collector_status.json. При провале задача автоматически возвращается на предыдущий collector.
+6. PowerPilotSensors.exe теперь компилируется как Windows GUI (/target:winexe), а не Console EXE. Постоянное окно терминала от фонового коллектора устранено архитектурно.
+7. Collector revision 8. Даже если обновление LibreHardwareMonitor ещё ожидает ручного подтверждения, PowerPilot отдельно обновляет текущий collector до GUI-subsystem, чтобы старый консольный collector не оставался открытым.
+8. Восстановление задачи PowerPilot Hardware Sensors больше не использует PowerShell. Повышение выполняется через runas самого PowerPilot, а schtasks.exe вызывается напрямую с корректными argv.
+9. Автоматическая проверка обновлений LibreHardwareMonitor переведена с PowerShell на нативный HTTPS-запрос PowerPilot.
+10. Установка PawnIO при необходимости также выполняется нативно: пакет скачивается PowerPilot, проверяется SHA-256 и запускается из уже повышенного helper-а.
+11. PowerShell/WMI fallback температур теперь кэшируется на 30 секунд вместо запуска каждые 5 секунд, что снижает лишнюю фоновую нагрузку и риск визуальных вспышек консольных процессов.
+12. Collector дополнительно всегда открывает изолированные профили CPU, Motherboard и Controllers даже при успешном Full-профиле. Это повышает шанс получить AMD Tctl/Tdie/CCD/SoC, VRM/Super-I/O и другие датчики, которые могли вернуть 0/null в первом широком проходе.
+
+Поведение обновления:
+- автоматическая проверка обновлений остаётся;
+- автоматическая установка с UAC не выполняется;
+- ручное «Обновить датчики температур» вызывает один UAC-запрос;
+- старый рабочий provider сохраняется до полной проверки нового;
+- после успешного обновления Task Scheduler использует GUI collector без консольного окна.
+
+Проверки сборки:
+- go test: app / installer / uninstaller — PASS;
+- Windows x64 GUI build — PASS;
+- installer payload hash — PASS;
+- Setup PE icon chain 16/24/32/48/64/128/256, planes=1, 32-bit — PASS;
+- фактический Windows runtime LibreHardwareMonitor/PawnIO/UAC/Task Scheduler — NOT RUN в Linux-среде;
+- визуальная проверка иконки файла Setup.exe в Windows Explorer — PENDING.

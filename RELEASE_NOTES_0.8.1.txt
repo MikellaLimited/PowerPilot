@@ -1,0 +1,9 @@
+PowerPilot 0.8.1
+
+- Встроенное обновление PowerPilot больше не запускает полный Setup.
+- Добавлен отдельный скрытый PowerPilot.Update.exe: он ждёт закрытия приложения, атомарно заменяет PowerPilot.exe и запускает новую версию.
+- Добавлен безопасный откат, если новая версия завершается во время стартовой проверки.
+- Для установки в защищённую папку updater сам запрашивает UAC; стандартная установка в LocalAppData обновляется без UAC.
+- GitHub Release теперь публикует PowerPilot_Update_X.Y.Z.zip с внутренним manifest и SHA-256 PowerPilot.exe.
+- Обновляющий клиент сначала проверяет SHA-256 всего GitHub asset, затем внутренний SHA-256 приложения.
+- Репозиторий и release workflow подготовлены для полной автоматической сборки Setup / Portable / Update / source / notes / validation.

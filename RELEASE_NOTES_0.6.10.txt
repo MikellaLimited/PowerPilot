@@ -1,0 +1,19 @@
+PowerPilot 0.6.10 — temperature collector recovery & real window transitions
+
+1. Температуры больше не обнуляются целиком из-за сбоя/устаревшей версии повышенного коллектора. После установки компонента PowerPilot сохраняет Windows/vendor fallback даже при проблеме фонового collector-а.
+2. Ревизия PowerPilotSensors повышена до 3. При запуске 0.6.10 существующая установка 0.6.8/0.6.9 автоматически пытается локально пересобрать collector из уже установленного LibreHardwareMonitorLib.dll и перезапустить существующую задачу Task Scheduler — без повторной загрузки PawnIO.
+3. Новый collector сначала пробует полный профиль LibreHardwareMonitor, а если один необязательный hardware group ломает Open(), изолированно открывает CPU, GPU, Motherboard, Storage, Memory, Controllers, PSU, Power и Battery. Ошибка одной группы больше не должна убирать температуры всех остальных компонентов.
+4. Добавлен self-heal фонового collector-а: при устаревшем sensors.json PowerPilot повторно запускает задачу «PowerPilot Hardware Sensors», а при недоступности Task Scheduler запускает локальный non-elevated fallback.
+5. Установка датчиков теперь создаёт задачу через Register-ScheduledTask с Highest, без ограничения времени выполнения и без остановки на питании от батареи.
+6. До первой явной установки датчиков температуры по-прежнему полностью скрыты.
+7. Анимация окна переделана: окно получает WS_CAPTION для корректного DWM/system-command поведения при сохранённом полностью кастомном title bar через WM_NCCALCSIZE.
+8. Сворачивание использует WM_SYSCOMMAND/SC_MINIMIZE и дешёвую compositor-alpha анимацию вместо AnimateWindow, который фактически не давал видимого эффекта на этом borderless окне.
+9. Восстановление из taskbar/tray начинается с alpha=0 и плавно проявляет готовое окно; старт PowerPilot использует тот же compositor transition. Maximize/restore-from-maximized оставлены системной геометрической анимации Windows.
+10. Версия приложения и установщика обновлена до 0.6.10.
+
+Проверки релиза:
+- GOOS=windows GOARCH=amd64 go test для app/installer/uninstaller;
+- финальная windows/amd64 GUI-сборка;
+- payload PowerPilot.exe внутри Setup совпадает со standalone;
+- финальная PE-цепочка иконки Setup.exe проверяется release_checks.py;
+- визуальная проверка иконки файла Setup.exe именно в Windows Explorer остаётся отдельным PENDING-чеком на Windows.

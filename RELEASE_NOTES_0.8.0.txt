@@ -1,0 +1,12 @@
+PowerPilot 0.8.0
+
+- Added native application updates through GitHub Releases.
+- Updater endpoint: MikellaLimited/PowerPilot.
+- Automatic update check at startup and every 6 hours while PowerPilot is running.
+- Added a full-width PowerPilot update card in Settings -> Data.
+- Update card supports manual check, download progress and one-click installer launch.
+- Release asset size and GitHub-provided SHA-256 digest are verified before installation.
+- Available application updates also appear in PowerPilot's notification center.
+- Added GitHub Actions release workflow: a vX.Y.Z tag builds and publishes Setup, Portable, source, notes and validation assets.
+- Added GITHUB_UPDATES.md with the release contract and security notes.
+- Existing hardware-sensor updater remains separate and keeps its own 3-hour schedule.

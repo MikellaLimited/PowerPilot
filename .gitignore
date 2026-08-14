@@ -9,7 +9,7 @@ profile.cov
 # Generated installer payload binaries
 installer/payload/*.exe
 
-# Generic binaries (tracked UI assets such as .ico/.wav/.png remain allowed)
+# Generic binaries (tracked assets such as .ico/.wav/.png/.zip remain allowed)
 *.exe
 *.exe~
 *.dll
@@ -20,8 +20,10 @@ installer/payload/*.exe
 go.work
 go.work.sum
 .env
+.tools/
 
 # Python
+.venv/
 __pycache__/
 *.pyc
 
@@ -34,10 +36,3 @@ __pycache__/
 resource_stats.json
 resource_app_history.json
 notifications.json
-
-# Generated during release build
-app/assets/PowerPilot.ico
-app/assets/LibreHardwareMonitor_master_net472.zip
-installer/assets/PowerPilot.ico
-installer/payload/PowerPilot.ico
-uninstaller/PowerPilot.ico

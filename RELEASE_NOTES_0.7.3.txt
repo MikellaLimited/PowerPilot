@@ -1,0 +1,19 @@
+PowerPilot 0.7.3
+
+UI polish — notification bell
+
+- Increased the notification bell icon from 24 px to 28 px while keeping the same compact 42 px button.
+- Added a tiny additional hover scale (up to ~30 px) without changing the hit box.
+- Added a short notification "ring burst": eight small golden particles travel outward inside the button and fade away.
+- The burst starts on first hover-entry and when a new unread notification arrives.
+- Added a subtle damped bell wiggle during the burst.
+- Effects are clipped strictly to the notification button, so they cannot overlap Settings or the page below.
+- The effect is one-shot (~560 ms), not a permanent idle animation, to avoid unnecessary GPU/CPU work.
+- Animation mode "off" disables the burst/wiggle while keeping the larger icon.
+
+Release validation:
+- app / installer / uninstaller: go test PASS
+- Windows amd64 GUI release build: PASS
+- installer payload matches standalone: PASS
+- final Setup PE icon resource chain: checked
+- Windows Explorer file-icon visual check: PENDING (requires real Windows Explorer)
