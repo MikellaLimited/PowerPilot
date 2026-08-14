@@ -393,7 +393,7 @@ func nextScheduledWake(now time.Time) (time.Time, string, bool) {
 	name := ""
 	lead := time.Duration(clampInt(app.settings.WakeLeadMinutes, 0, 60)) * time.Minute
 	for _, t := range app.settings.SavedTasks {
-		if t.Mode != 4 || !t.Recurrence.Enabled {
+		if t.Paused || t.Mode != 4 || !t.Recurrence.Enabled {
 			continue
 		}
 		occ, err := nextOccurrence(t.Recurrence, now)

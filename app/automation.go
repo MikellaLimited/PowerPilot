@@ -408,6 +408,9 @@ func nextOccurrence(r RecurrenceSpec, from time.Time) (time.Time, error) {
 func recurrenceKey(t time.Time) string { return t.Format("2006-01-02 15:04") }
 
 func savedRecurrenceDue(t SavedTask, now time.Time) (string, bool) {
+	if t.Paused {
+		return "", false
+	}
 	r := t.Recurrence
 	if !r.Enabled || t.Mode != 4 {
 		return "", false

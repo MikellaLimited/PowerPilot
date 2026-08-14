@@ -21,7 +21,7 @@ import (
 
 // PowerPilot 0.4.0 - Win32 + Direct2D/DirectWrite, no external runtime.
 
-const appVersion = "0.8.1"
+const appVersion = "0.8.2"
 const normalMinClientW = 640
 const normalMinClientH = 650
 const miniClientW = 500
@@ -452,6 +452,7 @@ type SavedTask struct {
 	Recurrence     RecurrenceSpec        `json:"recurrence"`
 	LastRunKey     string                `json:"last_run_key,omitempty"`
 	Favorite       bool                  `json:"favorite,omitempty"`
+	Paused         bool                  `json:"paused,omitempty"`
 	TaskKind       int                   `json:"task_kind,omitempty"` // 0 simple, 1 block
 }
 
@@ -792,6 +793,7 @@ type App struct {
 	historySearchText                      string
 	savedMenuOpenIdx                       int
 	savedPopupRect                         RECT
+	savedPopupPauseRect                    RECT
 	savedPopupEditRect                     RECT
 	savedPopupDuplicateRect                RECT
 	savedPopupDeleteRect                   RECT
@@ -1927,16 +1929,17 @@ func layoutControls(hwnd uintptr) {
 			local := savedLocalForUnderlying(app.savedMenuOpenIdx)
 			if local >= 0 && local < app.savedVisible {
 				btn := app.savedMenuButtonRects[local]
-				menuW, menuH := 154, 118
+				menuW, menuH := 170, 154
 				x := int(btn.Right) - menuW
 				y := int(btn.Bottom) + 5
 				if y+menuH > bodyBottom {
 					y = int(btn.Top) - menuH - 5
 				}
 				app.savedPopupRect = RECT{int32(x), int32(y), int32(x + menuW), int32(y + menuH)}
-				app.savedPopupEditRect = RECT{int32(x + 6), int32(y + 6), int32(x + menuW - 6), int32(y + 38)}
-				app.savedPopupDuplicateRect = RECT{int32(x + 6), int32(y + 42), int32(x + menuW - 6), int32(y + 74)}
-				app.savedPopupDeleteRect = RECT{int32(x + 6), int32(y + 78), int32(x + menuW - 6), int32(y + 112)}
+				app.savedPopupPauseRect = RECT{int32(x + 6), int32(y + 6), int32(x + menuW - 6), int32(y + 38)}
+				app.savedPopupEditRect = RECT{int32(x + 6), int32(y + 42), int32(x + menuW - 6), int32(y + 74)}
+				app.savedPopupDuplicateRect = RECT{int32(x + 6), int32(y + 78), int32(x + menuW - 6), int32(y + 110)}
+				app.savedPopupDeleteRect = RECT{int32(x + 6), int32(y + 114), int32(x + menuW - 6), int32(y + 148)}
 			}
 		}
 	}
@@ -2555,6 +2558,7 @@ func closeSavedMenuImmediate() {
 	app.savedMenuTarget = 0
 	app.savedMenuPendingClose = false
 	app.savedPopupRect = RECT{}
+	app.savedPopupPauseRect = RECT{}
 	app.savedPopupEditRect = RECT{}
 	app.savedPopupDuplicateRect = RECT{}
 	app.savedPopupDeleteRect = RECT{}
@@ -4866,7 +4870,11 @@ func drawSavedTasksPage(hdc uintptr, body RECT, w int) {
 		t := app.settings.SavedTasks[idx]
 		roundFill(hdc, r, surfaceButtonColor(), 12)
 		rightReserve := 214
-		drawText(hdc, t.Name, int(r.Left)+16, int(r.Top)+8, int(r.Right-r.Left)-rightReserve, 20, 14, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		nameColor := theme.text
+		if t.Paused {
+			nameColor = theme.muted
+		}
+		drawText(hdc, t.Name, int(r.Left)+16, int(r.Top)+8, int(r.Right-r.Left)-rightReserve, 20, 14, 650, nameColor, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 		drawText(hdc, savedTaskSummary(t), int(r.Left)+16, int(r.Top)+34, int(r.Right-r.Left)-rightReserve, 18, 11, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 		fav := "☆"
 		if t.Favorite {
@@ -4901,6 +4909,11 @@ func drawSavedTasksPage(hdc uintptr, body RECT, w int) {
 		if ui2d.active {
 			d2dPushClip(popup)
 		}
+		pauseLabel := "Приостановить"
+		if app.savedMenuOpenIdx < len(app.settings.SavedTasks) && app.settings.SavedTasks[app.savedMenuOpenIdx].Paused {
+			pauseLabel = "Возобновить"
+		}
+		drawButton(hdc, app.savedPopupPauseRect, pauseLabel, false)
 		drawButton(hdc, app.savedPopupEditRect, "Редактировать", false)
 		drawButton(hdc, app.savedPopupDuplicateRect, "Создать копию", false)
 		drawOutlinedButton(hdc, app.savedPopupDeleteRect, "Удалить", theme.danger)
@@ -5372,15 +5385,16 @@ func updateScrollGeometry() {
 			local := savedLocalForUnderlying(app.savedMenuOpenIdx)
 			if local >= 0 && local < len(app.savedMenuButtonRects) {
 				btn := app.savedMenuButtonRects[local]
-				menuW, menuH := int32(142), int32(82)
+				menuW, menuH := int32(170), int32(154)
 				x, y := btn.Right-menuW, btn.Bottom+5
 				if y+menuH > app.savedListClip.Bottom {
 					y = btn.Top - menuH - 5
 				}
 				app.savedPopupRect = RECT{x, y, x + menuW, y + menuH}
-				app.savedPopupEditRect = RECT{x + 6, y + 6, x + menuW - 6, y + 38}
-				app.savedPopupDuplicateRect = RECT{x + 6, y + 42, x + menuW - 6, y + 74}
-				app.savedPopupDeleteRect = RECT{x + 6, y + 78, x + menuW - 6, y + 112}
+				app.savedPopupPauseRect = RECT{x + 6, y + 6, x + menuW - 6, y + 38}
+				app.savedPopupEditRect = RECT{x + 6, y + 42, x + menuW - 6, y + 74}
+				app.savedPopupDuplicateRect = RECT{x + 6, y + 78, x + menuW - 6, y + 110}
+				app.savedPopupDeleteRect = RECT{x + 6, y + 114, x + menuW - 6, y + 148}
 			}
 		}
 	}
@@ -7182,6 +7196,15 @@ func onClick(x, y int32) {
 			return
 		}
 		if app.savedMenuOpenIdx >= 0 {
+			if pointIn(app.savedPopupPauseRect, x, y) {
+				idx := app.savedMenuOpenIdx
+				app.savedMenuOpenIdx = -1
+				toggleSavedTaskPaused(idx)
+				playUI(clickSound)
+				layoutControls(app.hwnd)
+				invalidate(app.hwnd)
+				return
+			}
 			if pointIn(app.savedPopupEditRect, x, y) {
 				idx := app.savedMenuOpenIdx
 				app.savedMenuOpenIdx = -1
@@ -8486,10 +8509,14 @@ func drawToggle(hdc uintptr, r RECT, enabled bool) {
 }
 
 func savedTaskSummary(t SavedTask) string {
-	if t.TaskKind == 1 {
-		return "Продвинутая"
+	prefix := ""
+	if t.Paused {
+		prefix = "На паузе · "
 	}
-	return "Простая"
+	if t.TaskKind == 1 {
+		return prefix + "Продвинутая"
+	}
+	return prefix + "Простая"
 }
 
 func saveCurrentTask() {
@@ -8793,9 +8820,31 @@ func duplicateSavedTask(idx int) {
 		cp.Steps[i].ID = newAutomationID("step")
 	}
 	cp.LastRunKey = ""
+	// A recurring copy starts paused so duplicating a task cannot silently create
+	// a second automatic run at the same time as the original.
+	if cp.Mode == 4 && cp.Recurrence.Enabled {
+		cp.Paused = true
+	}
 	app.settings.SavedTasks = append(app.settings.SavedTasks, cp)
 	saveSettings()
 	appendHistory("SAVE", "Копия: "+cp.Name)
+}
+
+func toggleSavedTaskPaused(idx int) {
+	if idx < 0 || idx >= len(app.settings.SavedTasks) {
+		return
+	}
+	t := &app.settings.SavedTasks[idx]
+	t.Paused = !t.Paused
+	state := "Возобновлена"
+	if t.Paused {
+		state = "Приостановлена"
+	}
+	saveSettings()
+	maintainWakeTimer(time.Now())
+	rebuildSavedFilter()
+	appendHistory("EDIT", state+" задача: "+t.Name)
+	app.status = state + " задача: " + t.Name
 }
 
 func deleteSavedTask(idx int) {

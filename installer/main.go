@@ -610,7 +610,7 @@ func createShortcut(path, target, icon string) error {
 }
 func registerUninstall(dir, exe, uninst string) {
 	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\PowerPilot`
-	vals := [][]string{{"DisplayName", "PowerPilot"}, {"DisplayVersion", "0.8.1"}, {"Publisher", "PowerPilot Project"}, {"InstallLocation", dir}, {"DisplayIcon", exe}, {"UninstallString", `"` + uninst + `"`}, {"NoModify", "1"}, {"NoRepair", "1"}}
+	vals := [][]string{{"DisplayName", "PowerPilot"}, {"DisplayVersion", "0.8.2"}, {"Publisher", "PowerPilot Project"}, {"InstallLocation", dir}, {"DisplayIcon", exe}, {"UninstallString", `"` + uninst + `"`}, {"NoModify", "1"}, {"NoRepair", "1"}}
 	for _, v := range vals {
 		typ := "REG_SZ"
 		if v[0] == "NoModify" || v[0] == "NoRepair" {
