@@ -1,0 +1,113 @@
+name: Release PowerPilot
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (for example 0.8.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: python -m pip install -r requirements.txt
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            $version = '${{ inputs.version }}'.TrimStart('v')
+          } else {
+            $version = '${{ github.ref_name }}'.TrimStart('v')
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          $sourceVersion = (Select-String -Path app/main.go -Pattern 'const appVersion = "([^"]+)"').Matches.Groups[1].Value
+          if ($sourceVersion -ne $version) {
+            throw "Tag/input version $version does not match appVersion $sourceVersion"
+          }
+
+      - name: Build Windows x64 release
+        shell: pwsh
+        run: python build_release.py
+
+      - name: Prepare release assets
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          Copy-Item release/PowerPilot_Setup.exe "release/PowerPilot_Setup_$version.exe"
+          Copy-Item release/PowerPilot.exe "release/PowerPilot_Portable_$version.exe"
+          Copy-Item release/release_validation.json "release/PowerPilot_${version}_release_validation.json"
+          Copy-Item "RELEASE_NOTES_$version.txt" "release/PowerPilot_${version}_RELEASE_NOTES.txt"
+          @'
+          from pathlib import Path
+          import zipfile
+          root=Path('.')
+          version=Path('app/main.go').read_text(encoding='utf-8').split('const appVersion = "',1)[1].split('"',1)[0]
+          out=Path('release')/f'PowerPilot_{version}_source.zip'
+          skip_parts={'.git','release','__pycache__'}
+          with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
+              for p in root.rglob('*'):
+                  if p.is_dir():
+                      continue
+                  rel=p.relative_to(root)
+                  if any(part in skip_parts for part in rel.parts):
+                      continue
+                  if rel.as_posix().startswith('installer/payload/') and p.suffix.lower()=='.exe':
+                      continue
+                  z.write(p,Path(f'PowerPilot_{version}_source')/rel)
+          '@ | python -
+
+      - name: Create tag for manual run
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $tag = "v$version"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if (-not (git tag -l $tag)) {
+            git tag $tag $env:GITHUB_SHA
+            git push origin $tag
+          }
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $tag = "v$version"
+          gh release create $tag `
+            "release/PowerPilot_Setup_$version.exe" `
+            "release/PowerPilot_Portable_$version.exe" `
+            "release/PowerPilot_${version}_source.zip" `
+            "release/PowerPilot_${version}_RELEASE_NOTES.txt" `
+            "release/PowerPilot_${version}_release_validation.json" `
+            --title "PowerPilot $version" `
+            --notes-file "release/PowerPilot_${version}_RELEASE_NOTES.txt"
