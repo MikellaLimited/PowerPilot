@@ -1,21 +1,16 @@
-PowerPilot — Third-Party Notices
-
-PowerPilot integrates with third-party components for extended hardware monitoring.
+PowerPilot third-party notice
 
 LibreHardwareMonitor
---------------------
-Project: LibreHardwareMonitor
-License: Mozilla Public License 2.0 (MPL-2.0)
-Source: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
+- Project: LibreHardwareMonitor/LibreHardwareMonitor
+- License: Mozilla Public License 2.0 (MPL-2.0)
+- Bundled snapshot: 0.9.7-pre724
+- Exact upstream commit: 825dc3de36c5816bb2a8b10b309244a8c362a7f9
+- Official successful GitHub Actions workflow run: 31707859588 (2026-08-13)
+- Bundled files are from the x64/net472 official CI artifact; debug symbols and XML docs are omitted from the embedded runtime bundle.
+- Corresponding source code is available from the official GitHub repository at the exact commit above.
 
-PowerPilot may redistribute or download LibreHardwareMonitor binaries/libraries as part of its hardware-sensor provider. LibreHardwareMonitor remains licensed under its original license and copyright terms.
+PowerPilot does not modify LibreHardwareMonitor source code; it invokes the upstream library through a small PowerPilot-owned collector process.
 
-PawnIO
-------
-PowerPilot may use PawnIO components through LibreHardwareMonitor to access low-level hardware sensors on supported systems. PawnIO and its bundled modules remain subject to their respective upstream licenses and copyright terms.
-
-Microsoft / Windows APIs
-------------------------
-PowerPilot uses Windows system APIs including Win32, Direct2D, DirectWrite, Task Scheduler, PDH, WMI and related operating-system facilities. These APIs are provided by Microsoft Windows and are not redistributed as part of PowerPilot.
-
-This notice is informational and does not replace the original license files distributed by the corresponding upstream projects.
+Notification bell icon
+- UI asset supplied by the project user as `icons8-колокол-48.png` and embedded as `app/assets/bell.png`.
+- The supplied filename indicates Icons8 provenance. PowerPilot includes the asset as provided; public redistributors should verify the applicable Icons8 license/attribution terms for their distribution.

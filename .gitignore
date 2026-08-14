@@ -1,37 +1,43 @@
-# Binaries / build outputs
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
+# Release/build output
+release/
 *.test
 *.out
 coverage.*
 *.coverprofile
 profile.cov
-release/
-installer/payload/*.exe
-*.tmp
-*.log
 
-# Generated build assets (recreated by tools/prepare_build_assets.py)
-app/assets/PowerPilot.ico
-app/assets/settings.ico
-installer/assets/PowerPilot.ico
-uninstaller/PowerPilot.ico
-app/assets/LibreHardwareMonitor_master_net472.zip
+# Generated installer payload binaries
+installer/payload/*.exe
+
+# Generic binaries (tracked UI assets such as .ico/.wav/.png remain allowed)
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go workspace / environment
+go.work
+go.work.sum
+.env
 
 # Python
 __pycache__/
-*.py[cod]
+*.pyc
 
-# Go
-go.work
-go.work.sum
-
-# Local config / editors
-.env
-.vscode/
+# Editors
 .idea/
-.DS_Store
-Thumbs.db
+.vscode/
+
+# Runtime/user data
+*.log
+resource_stats.json
+resource_app_history.json
+notifications.json
+
+# Generated during release build
+app/assets/PowerPilot.ico
+app/assets/LibreHardwareMonitor_master_net472.zip
+installer/assets/PowerPilot.ico
+installer/payload/PowerPilot.ico
+uninstaller/PowerPilot.ico
