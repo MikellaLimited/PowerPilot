@@ -10,7 +10,7 @@ on:
     inputs:
       version:
         description: 'Version without v, e.g. 0.8.1'
-        required: true
+        required: false
         type: string
 
 permissions:
@@ -18,21 +18,37 @@ permissions:
 
 jobs:
   build-release:
+    if: github.event_name == 'workflow_dispatch' || github.ref_type == 'tag' || startsWith(github.event.head_commit.message, 'release:')
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Restore PowerPilot source bundle
+      - name: Restore PowerPilot source bundle when needed
         shell: pwsh
         run: |
-          if (Test-Path 'bootstrap/powerpilot-source.tar.gz') {
-            tar -xzf bootstrap/powerpilot-source.tar.gz -C .
+          if (!(Test-Path 'app/main.go')) {
+            $bundle = Get-ChildItem 'bootstrap' -Filter 'PowerPilot_*_source.zip' -File -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTimeUtc -Descending |
+              Select-Object -First 1
+            if (-not $bundle) {
+              throw 'PowerPilot source is not present. Upload bootstrap/PowerPilot_<version>_source.zip or commit the source tree.'
+            }
+            $restore = Join-Path $env:RUNNER_TEMP 'powerpilot-source'
+            if (Test-Path $restore) { Remove-Item $restore -Recurse -Force }
+            Expand-Archive -Path $bundle.FullName -DestinationPath $restore -Force
+            $root = Get-ChildItem $restore -Directory | Select-Object -First 1
+            if (-not $root) { throw 'Source ZIP has no root directory' }
+            Get-ChildItem $root.FullName -Force | ForEach-Object {
+              Copy-Item $_.FullName -Destination '.' -Recurse -Force
+            }
           }
           if (!(Test-Path 'app/main.go')) { throw 'PowerPilot source bundle was not restored' }
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
+          go-version: '1.24.x'
 
       - uses: actions/setup-python@v5
         with:
@@ -43,42 +59,59 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Install Python dependencies
-        run: python -m pip install -r requirements.txt
+        shell: pwsh
+        run: |
+          if (Test-Path 'requirements.txt') {
+            python -m pip install -r requirements.txt
+          }
 
       - name: Resolve version
         id: version
         shell: pwsh
         run: |
-          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+          $src = Get-Content app/main.go -Raw
+          if ($src -notmatch 'const appVersion = "([^"]+)"') { throw 'appVersion not found' }
+          $sourceVersion = $Matches[1]
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch' -and '${{ inputs.version }}') {
             $v='${{ inputs.version }}'.TrimStart('v','V')
           } elseif ('${{ github.ref_type }}' -eq 'tag') {
             $v='${{ github.ref_name }}'.TrimStart('v','V')
           } else {
-            $src = Get-Content app/main.go -Raw
-            if ($src -notmatch 'const appVersion = "([^"]+)"') { throw 'appVersion not found' }
-            $v=$Matches[1]
+            $v=$sourceVersion
           }
+          if ($sourceVersion -ne $v) { throw "appVersion $sourceVersion does not match release version $v" }
           "version=$v" >> $env:GITHUB_OUTPUT
-          $src = Get-Content app/main.go -Raw
-          if ($src -notmatch ('const appVersion = "' + [regex]::Escape($v) + '"')) {
-            throw "appVersion in source does not match release version $v"
-          }
 
-      - name: Prepare pinned hardware-monitor provider
+      - name: Prepare build assets
+        shell: pwsh
         run: python prepare_build_assets.py
 
-      - name: Build and validate release
+      - name: Build and validate Windows x64 release
+        shell: pwsh
         run: python build_release.py
+
+      - name: Verify release assets
+        shell: pwsh
+        run: |
+          $v='${{ steps.version.outputs.version }}'
+          $assets=@(
+            "release/PowerPilot_Setup_$v.exe",
+            "release/PowerPilot_Portable_$v.exe",
+            "release/PowerPilot_Update_$v.zip",
+            "release/PowerPilot_${v}_source.zip",
+            "release/PowerPilot_${v}_RELEASE_NOTES.txt",
+            "release/PowerPilot_${v}_release_validation.json"
+          )
+          foreach($a in $assets){ if(-not (Test-Path $a)){ throw "Missing release asset: $a" } }
 
       - name: Upload CI artifact
         uses: actions/upload-artifact@v4
         with:
           name: PowerPilot-${{ steps.version.outputs.version }}
-          path: release/*
+          path: release/PowerPilot_*
           if-no-files-found: error
 
       - name: Publish GitHub Release
-        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'release:')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -86,10 +119,17 @@ jobs:
           $v='${{ steps.version.outputs.version }}'
           $tag="v$v"
           $notes="release/PowerPilot_${v}_RELEASE_NOTES.txt"
-          $files = Get-ChildItem release -File | ForEach-Object { $_.FullName }
+          $assets=@(
+            "release/PowerPilot_Setup_$v.exe",
+            "release/PowerPilot_Portable_$v.exe",
+            "release/PowerPilot_Update_$v.zip",
+            "release/PowerPilot_${v}_source.zip",
+            "release/PowerPilot_${v}_RELEASE_NOTES.txt",
+            "release/PowerPilot_${v}_release_validation.json"
+          )
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag @files --clobber
+            gh release upload $tag @assets --clobber
           } else {
-            gh release create $tag @files --title "PowerPilot $v" --notes-file $notes --target $env:GITHUB_SHA
+            gh release create $tag @assets --target $env:GITHUB_SHA --title "PowerPilot $v" --notes-file $notes
           }
