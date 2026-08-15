@@ -337,11 +337,12 @@ func drawResourceGraph(hdc uintptr, r RECT, kind int) {
 		if span <= 0 {
 			span = time.Second
 		}
-		for i := 0; i < 5; i++ {
-			f := float64(i) / 4
+		tickCount := resourceTimelineTickCount()
+		for i := 0; i < tickCount; i++ {
+			f := float64(i) / float64(tickCount-1)
 			tm := startAt.Add(time.Duration(float64(span) * f))
 			x := int(plot.Left) + int(float64(plot.Right-plot.Left)*f)
-			if i > 0 && i < 4 {
+			if i > 0 && i < tickCount-1 {
 				d2dDrawLine(float32(x), float32(plot.Top), float32(x), float32(plot.Bottom), .45, blendColor(theme.border, theme.muted, .16))
 			}
 			flags := uint32(DT_CENTER | DT_VCENTER | DT_SINGLELINE)
@@ -351,7 +352,7 @@ func drawResourceGraph(hdc uintptr, r RECT, kind int) {
 				x0 = int(plot.Left)
 				ww = 90
 			}
-			if i == 4 {
+			if i == tickCount-1 {
 				flags = DT_RIGHT | DT_VCENTER | DT_SINGLELINE
 				x0 = int(plot.Right) - 90
 				ww = 90

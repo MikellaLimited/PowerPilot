@@ -195,7 +195,7 @@ func layoutAdvancedResourceMonitor(bodyTop, bodyBottom, innerLeft, innerRight in
 	if app.resourceAdvancedView == 0 {
 		searchY := tabY + 42
 		app.resourceProcessSearchRect = RECT{int32(innerLeft), int32(searchY), int32(innerRight), int32(searchY + 34)}
-		move(app.edits[idResourceSearch], innerLeft+10, searchY+8, innerRight-innerLeft-20, 19)
+		move(app.edits[idResourceSearch], innerLeft+8, searchY+3, innerRight-innerLeft-16, 28)
 		if app.notificationPanelOpen || app.taskMenuOpen || app.resourceMenuOpen {
 			pShowWindow.Call(app.edits[idResourceSearch], SW_HIDE)
 		} else {
@@ -880,7 +880,7 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 			}
 			for i, h := range headers {
 				app.resourceStatsSortRects[i] = RECT{int32(xs[i]), int32(y - 2), int32(xs[i] + ws[i]), int32(y + 22)}
-				drawSelectableButton(hdc, app.resourceStatsSortRects[i], statsSortLabel(h, i), app.resourceStatsSort == i)
+				drawCompactSortButton(hdc, app.resourceStatsSortRects[i], statsSortLabel(h, i), app.resourceStatsSort == i)
 			}
 			y += 24
 			for _, a := range apps {
@@ -911,8 +911,8 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 			nameW := max(220, (right-left)*56/100)
 			app.resourceStatsSortRects[0] = RECT{int32(left), int32(y - 2), int32(left + nameW), int32(y + 22)}
 			app.resourceStatsSortRects[1] = RECT{int32(left + nameW), int32(y - 2), int32(right), int32(y + 22)}
-			drawSelectableButton(hdc, app.resourceStatsSortRects[0], statsSortLabel("Приложение", 0), app.resourceStatsSort == 0)
-			drawSelectableButton(hdc, app.resourceStatsSortRects[1], statsSortLabel("Потрачено", 1), app.resourceStatsSort == 1)
+			drawCompactSortButton(hdc, app.resourceStatsSortRects[0], statsSortLabel("Приложение", 0), app.resourceStatsSort == 0)
+			drawCompactSortButton(hdc, app.resourceStatsSortRects[1], statsSortLabel("Потрачено", 1), app.resourceStatsSort == 1)
 			y += 24
 			for _, a := range apps {
 				if y+38 > int(body.Bottom)-10 {
@@ -932,8 +932,8 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 		nameW := max(220, (right-left)*56/100)
 		app.resourceStatsSortRects[0] = RECT{int32(left), int32(y - 2), int32(left + nameW), int32(y + 22)}
 		app.resourceStatsSortRects[1] = RECT{int32(left + nameW), int32(y - 2), int32(right), int32(y + 22)}
-		drawSelectableButton(hdc, app.resourceStatsSortRects[0], statsSortLabel("Приложение", 0), app.resourceStatsSort == 0)
-		drawSelectableButton(hdc, app.resourceStatsSortRects[1], statsSortLabel("Активность", 1), app.resourceStatsSort == 1)
+		drawCompactSortButton(hdc, app.resourceStatsSortRects[0], statsSortLabel("Приложение", 0), app.resourceStatsSort == 0)
+		drawCompactSortButton(hdc, app.resourceStatsSortRects[1], statsSortLabel("Активность", 1), app.resourceStatsSort == 1)
 		y += 24
 		for _, a := range apps {
 			if y+38 > int(body.Bottom)-10 {
@@ -1176,11 +1176,12 @@ func drawStatsHistoryGraph(hdc uintptr, r RECT, samples []ResourceStatSample, mo
 			d2dDrawLine(x1, y1, x2, y2, 1.5, se.color)
 		}
 	}
-	for i := 0; i < 5; i++ {
-		f := float64(i) / 4
+	tickCount := resourceTimelineTickCount()
+	for i := 0; i < tickCount; i++ {
+		f := float64(i) / float64(tickCount-1)
 		tm := startAt.Add(time.Duration(float64(span) * f))
 		x := int(plot.Left) + int(float64(plot.Right-plot.Left)*f)
-		if i > 0 && i < 4 {
+		if i > 0 && i < tickCount-1 {
 			d2dDrawLine(float32(x), float32(plot.Top), float32(x), float32(plot.Bottom), .45, blendColor(theme.border, theme.muted, .16))
 		}
 		flags := uint32(DT_CENTER | DT_VCENTER | DT_SINGLELINE)
@@ -1190,7 +1191,7 @@ func drawStatsHistoryGraph(hdc uintptr, r RECT, samples []ResourceStatSample, mo
 			x0 = int(plot.Left)
 			ww = 100
 		}
-		if i == 4 {
+		if i == tickCount-1 {
 			flags = DT_RIGHT | DT_VCENTER | DT_SINGLELINE
 			x0 = int(plot.Right) - 100
 			ww = 100

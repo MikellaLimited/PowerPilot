@@ -84,8 +84,10 @@ type d2dRenderer struct {
 	bellBrush       uintptr
 	appBitmap       uintptr
 	appBrush        uintptr
-	scenarioBitmaps [5]uintptr
-	scenarioBrushes [5]uintptr
+	scenarioBitmaps [6]uintptr
+	scenarioBrushes [6]uintptr
+	captionBitmaps  [7]uintptr
+	captionBrushes  [7]uintptr
 	active          bool
 }
 
@@ -236,6 +238,16 @@ func d2dReleaseTargetResources() {
 		if ui2d.scenarioBitmaps[i] != 0 {
 			comRelease(ui2d.scenarioBitmaps[i])
 			ui2d.scenarioBitmaps[i] = 0
+		}
+	}
+	for i := range ui2d.captionBrushes {
+		if ui2d.captionBrushes[i] != 0 {
+			comRelease(ui2d.captionBrushes[i])
+			ui2d.captionBrushes[i] = 0
+		}
+		if ui2d.captionBitmaps[i] != 0 {
+			comRelease(ui2d.captionBitmaps[i])
+			ui2d.captionBitmaps[i] = 0
 		}
 	}
 	if ui2d.target != 0 {
@@ -597,6 +609,7 @@ const (
 	scenarioIconCopy
 	scenarioIconDelete
 	scenarioIconPause
+	scenarioIconPlay
 )
 
 func d2dEnsureScenarioIcon(kind int) bool {
@@ -606,12 +619,36 @@ func d2dEnsureScenarioIcon(kind int) bool {
 	if ui2d.scenarioBrushes[kind] != 0 {
 		return true
 	}
-	data := [][]byte{pastePNGData, pasteAllPNGData, copyPNGData, deletePNGData, pausePNGData}[kind]
+	data := [][]byte{pastePNGData, pasteAllPNGData, copyPNGData, deletePNGData, pausePNGData, playPNGData}[kind]
 	bmp, brush := d2dCreateImageBrush(data, 22, 22)
 	if bmp == 0 || brush == 0 {
 		return false
 	}
 	ui2d.scenarioBitmaps[kind], ui2d.scenarioBrushes[kind] = bmp, brush
+	return true
+}
+
+func d2dEnsureCaptionIcon(kind int) bool {
+	if kind < 0 || kind >= len(ui2d.captionBrushes) {
+		return false
+	}
+	if ui2d.captionBrushes[kind] != 0 {
+		return true
+	}
+	data := [][]byte{captionClosePNGData, captionFullscreenPNGData, captionMinimizePNGData, captionMiniPNGData, captionExitMiniPNGData, captionPinPNGData, captionRestorePNGData}[kind]
+	bmp, brush := d2dCreateImageBrush(data, 22, 22)
+	if bmp == 0 || brush == 0 {
+		return false
+	}
+	ui2d.captionBitmaps[kind], ui2d.captionBrushes[kind] = bmp, brush
+	return true
+}
+
+func d2dDrawCaptionIcon(kind int, r RECT) bool {
+	if !ui2d.active || !d2dEnsureCaptionIcon(kind) {
+		return false
+	}
+	d2dDrawImageBrushSizedRotated(ui2d.captionBrushes[kind], r, 0, 22, 22)
 	return true
 }
 
