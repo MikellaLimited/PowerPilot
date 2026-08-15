@@ -739,6 +739,8 @@ type App struct {
 	draggingScenarioKind                   int
 	draggingScenarioIndex                  int
 	draggingScenarioTarget                 int
+	draggingScenarioParentID               string
+	draggingScenarioIntoGroup              bool
 	draggingScenarioY                      int32
 	dragGapAnim                            float64
 	scenarioScrollPx                       float64
@@ -1748,6 +1750,11 @@ func layoutControls(hwnd uintptr) {
 		app.settingsScrollTrack = RECT{int32(innerRight - 7), int32(headerContentY), int32(innerRight - 2), int32(viewportBottom)}
 		viewH := max(1, viewportBottom-headerContentY)
 		app.settingsScrollThumb = scrollThumbRectPixels(app.settingsScrollTrack, viewH+int(app.settingsScrollMax), viewH, app.settingsScrollPx)
+		settingsRight := innerRight
+		if app.settingsScrollMax > 0 {
+			settingsRight -= 18
+		}
+		settingsContentW := settingsRight - innerLeft
 		switch app.settingsSubpage {
 		case 0:
 			row0 := uiSettingsRowTop(contentY, 0)
@@ -1771,18 +1778,18 @@ func layoutControls(hwnd uintptr) {
 			}
 			app.hideZeroResourceProcessesRect = RECT{int32(innerLeft), int32(row7), int32(innerLeft + 28), int32(row7 + 28)}
 			lineX := int(app.wakeScheduledRect.Right) + 12
-			_, app.wakeLeadFieldRect, _ = uiInlineNumberLayout("Пробуждать ПК по расписанию за", "мин", lineX, uiInlineSentenceY(row5), innerRight, 2)
+			_, app.wakeLeadFieldRect, _ = uiInlineNumberLayout("Пробуждать ПК по расписанию за", "мин", lineX, uiInlineSentenceY(row5), settingsRight, 2)
 			uiPlaceInlineNumberEdit(idWakeLead, app.wakeLeadFieldRect)
 		case 1:
 			rowY := contentY + 26
-			tw := (innerContentW - 20) / 3
+			tw := (settingsContentW - 20) / 3
 			for i := 0; i < 3; i++ {
 				x := innerLeft + i*(tw+10)
 				app.themeRects[i] = RECT{int32(x), int32(rowY), int32(x + tw), int32(rowY + 50)}
 			}
 			bgY := rowY + 86
 			bgCols := 3
-			bw := (innerContentW - 20) / bgCols
+			bw := (settingsContentW - 20) / bgCols
 			for i := 0; i < 6; i++ {
 				row, col := i/bgCols, i%bgCols
 				x := innerLeft + col*(bw+10)
@@ -1790,13 +1797,13 @@ func layoutControls(hwnd uintptr) {
 				app.backgroundRects[i] = RECT{int32(x), int32(y), int32(x + bw), int32(y + 44)}
 			}
 			surfY := bgY + 126
-			sw := (innerContentW - 40) / 5
+			sw := (settingsContentW - 40) / 5
 			for i := 0; i < 5; i++ {
 				x := innerLeft + i*(sw+10)
 				app.surfaceRects[i] = RECT{int32(x), int32(surfY), int32(x + sw), int32(surfY + 46)}
 			}
 			animY := surfY + 78
-			animW := (innerContentW - 20) / 3
+			animW := (settingsContentW - 20) / 3
 			for i := 0; i < 3; i++ {
 				x := innerLeft + i*(animW+10)
 				app.animationRects[i] = RECT{int32(x), int32(animY), int32(x + animW), int32(animY + 44)}
@@ -1895,13 +1902,13 @@ func layoutControls(hwnd uintptr) {
 				app.dataRects[i] = RECT{}
 			}
 			if app.settingsCategory == 4 {
-				app.dataRects[5] = RECT{int32(innerLeft), int32(contentY + 20), int32(innerRight), int32(contentY + 88)}
+				app.dataRects[5] = RECT{int32(innerLeft), int32(contentY + 20), int32(settingsRight), int32(contentY + 88)}
 				updateY := int(app.dataRects[5].Bottom) + 14
-				app.appUpdateRect = RECT{int32(innerLeft), int32(updateY), int32(innerRight), int32(updateY + 68)}
+				app.appUpdateRect = RECT{int32(innerLeft), int32(updateY), int32(settingsRight), int32(updateY + 68)}
 				autoY := int(app.appUpdateRect.Bottom) + 14
-				app.temperatureAutoUpdateRect = RECT{int32(innerLeft), int32(autoY), int32(innerRight), int32(autoY + 48)}
+				app.temperatureAutoUpdateRect = RECT{int32(innerLeft), int32(autoY), int32(settingsRight), int32(autoY + 48)}
 			} else {
-				bw := (innerContentW - 12) / 2
+				bw := (settingsContentW - 12) / 2
 				bh := 68
 				for i := 0; i < 5; i++ {
 					row, col := i/2, i%2
@@ -1919,57 +1926,57 @@ func layoutControls(hwnd uintptr) {
 			app.safetyFullscreenRect = RECT{int32(innerLeft), int32(row0), int32(innerLeft + 28), int32(row0 + 28)}
 			app.safetyRecentRect = RECT{int32(innerLeft), int32(row1), int32(innerLeft + 28), int32(row1 + 28)}
 			lineX := int(app.safetyRecentRect.Right) + 12
-			_, app.whenFieldRect, _ = uiInlineNumberLayout("Считать неактивным после", "мин", lineX, int(app.safetyRecentRect.Top)-3, innerRight, 2)
+			_, app.whenFieldRect, _ = uiInlineNumberLayout("Считать неактивным после", "мин", lineX, int(app.safetyRecentRect.Top)-3, settingsRight, 2)
 			uiPlaceInlineNumberEdit(idSafetyIdle, app.whenFieldRect)
 			app.showSystemProcessesRect = RECT{int32(innerLeft), int32(row2), int32(innerLeft + 28), int32(row2 + 28)}
-			app.safetyProcessesRect = RECT{int32(innerLeft), int32(row3), int32(minInt(innerRight, innerLeft+280)), int32(row3 + 42)}
+			app.safetyProcessesRect = RECT{int32(innerLeft), int32(row3), int32(minInt(settingsRight, innerLeft+280)), int32(row3 + 42)}
 		case 6:
 			app.soundsRect = RECT{int32(innerLeft), int32(contentY + 10), int32(innerLeft + 28), int32(contentY + 38)}
-			trackLeft := innerLeft + 40
-			valueW := 52
-			app.volumeValueRect = RECT{int32(innerRight - valueW), int32(contentY + 88), int32(innerRight), int32(contentY + 116)}
+			trackLeft := innerLeft + 4
+			valueW := 66
+			app.volumeValueRect = RECT{int32(settingsRight - valueW), int32(contentY + 88), int32(settingsRight), int32(contentY + 116)}
 			trackRight := int(app.volumeValueRect.Left) - 18
 			trackY := contentY + 98
 			app.volumeTrackRect = RECT{int32(trackLeft), int32(trackY), int32(trackRight), int32(trackY + 8)}
 			knobX := trackLeft + (trackRight-trackLeft)*app.settings.SoundVolume/100
 			app.volumeKnobRect = RECT{int32(knobX - 8), int32(trackY - 5), int32(knobX + 8), int32(trackY + 13)}
-			move(app.edits[idSoundVolume], int(app.volumeValueRect.Left)+4, int(app.volumeValueRect.Top)+5, int(app.volumeValueRect.Right-app.volumeValueRect.Left)-8, 18)
+			move(app.edits[idSoundVolume], int(app.volumeValueRect.Left)+4, int(app.volumeValueRect.Top)+5, valueW-28, 18)
 			pShowWindow.Call(app.edits[idSoundVolume], SW_SHOW)
 		case 7:
 			row0 := contentY + 12
 			app.miniAlwaysTopRect = RECT{int32(innerLeft), int32(row0), int32(innerLeft + 28), int32(row0 + 28)}
 			miniY := row0 + 72
 			miniGap := 8
-			miniW := (innerContentW - miniGap*3) / 4
+			miniW := (settingsContentW - miniGap*3) / 4
 			for i := 0; i < 4; i++ {
 				x := innerLeft + i*(miniW+miniGap)
 				app.miniOptionRects[i] = RECT{int32(x), int32(miniY), int32(x + miniW), int32(miniY + 38)}
 			}
 			sizeY := miniY + 86
 			sizeGap := 8
-			sizeW := (innerContentW - sizeGap*2) / 3
+			sizeW := (settingsContentW - sizeGap*2) / 3
 			for i := 0; i < 3; i++ {
 				x := innerLeft + i*(sizeW+sizeGap)
 				app.miniSizeRects[i] = RECT{int32(x), int32(sizeY), int32(x + sizeW), int32(sizeY + 38)}
 			}
 			scaleY := sizeY + 86
 			scaleGap := 8
-			scaleW := (innerContentW - scaleGap*3) / 4
+			scaleW := (settingsContentW - scaleGap*3) / 4
 			for i := 0; i < 4; i++ {
 				x := innerLeft + i*(scaleW+scaleGap)
 				app.uiScaleRects[i] = RECT{int32(x), int32(scaleY), int32(x + scaleW), int32(scaleY + 38)}
 			}
 			timelineY := scaleY + 100
 			selectorGap := 8
-			selectorW := (innerContentW - selectorGap) / 2
+			selectorW := (settingsContentW - selectorGap) / 2
 			for i := range app.resourceTimelineModeRects {
 				x := innerLeft + i*(selectorW+selectorGap)
 				app.resourceTimelineModeRects[i] = RECT{int32(x), int32(timelineY + 24), int32(x + selectorW), int32(timelineY + 60)}
 			}
 			tickY := timelineY + 104
 			valueW := 54
-			app.resourceTimelineTicksValueRect = RECT{int32(innerRight - valueW), int32(tickY - 10), int32(innerRight), int32(tickY + 20)}
-			app.resourceTimelineTicksTrackRect = RECT{int32(innerLeft + 18), int32(tickY), int32(innerRight - valueW - 20), int32(tickY + 8)}
+			app.resourceTimelineTicksValueRect = RECT{int32(settingsRight - valueW), int32(tickY - 10), int32(settingsRight), int32(tickY + 20)}
+			app.resourceTimelineTicksTrackRect = RECT{int32(innerLeft + 18), int32(tickY), int32(settingsRight - valueW - 20), int32(tickY + 8)}
 			ticks := resourceTimelineTickCount()
 			knobX := int(app.resourceTimelineTicksTrackRect.Left) + (int(app.resourceTimelineTicksTrackRect.Right-app.resourceTimelineTicksTrackRect.Left))*(ticks-2)/10
 			app.resourceTimelineTicksKnobRect = RECT{int32(knobX - 8), int32(tickY - 5), int32(knobX + 8), int32(tickY + 13)}
@@ -3345,32 +3352,12 @@ func drawCaptionGlyph(hdc uintptr, kind int, r RECT) {
 	cy := float32(r.Top+r.Bottom) / 2
 	c := theme.text
 	if ui2d.active {
-		iconKind := -1
-		switch kind {
-		case 0:
-			if app.miniMode {
-				iconKind = 5 // pin
-			} else {
-				iconKind = 3 // enter mini mode
-			}
-		case 1:
-			iconKind = 2 // minimize
-		case 2:
-			if app.miniMode {
-				iconKind = 4 // leave mini mode
-			} else if z, _, _ := pIsZoomed.Call(app.hwnd); z != 0 {
-				iconKind = 6 // leave fullscreen/maximized mode
-			} else {
-				iconKind = 1 // fullscreen/maximize
-			}
-		case 3:
-			iconKind = 0 // close
-		}
-		if iconKind >= 0 {
+		// Keep the compact vector caption set; only the pin uses the supplied bitmap.
+		if kind == 0 && app.miniMode {
 			size := int32(20)
 			x := r.Left + (r.Right-r.Left-size)/2
 			y := r.Top + (r.Bottom-r.Top-size)/2
-			if d2dDrawCaptionIcon(iconKind, RECT{x, y, x + size, y + size}) {
+			if d2dDrawCaptionIcon(5, RECT{x, y, x + size, y + size}) {
 				return
 			}
 		}
@@ -3716,7 +3703,7 @@ func drawSoundSettings(hdc uintptr, body RECT) {
 	}
 	if app.volumeValueRect.Right > app.volumeValueRect.Left {
 		roundFill(hdc, app.volumeValueRect, surfaceButtonColor(), 8)
-		drawText(hdc, "%", int(app.volumeValueRect.Right)+4, int(app.volumeValueRect.Top), 18, int(app.volumeValueRect.Bottom-app.volumeValueRect.Top), 11, 600, theme.accent2, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "%", int(app.volumeValueRect.Right)-22, int(app.volumeValueRect.Top), 18, int(app.volumeValueRect.Bottom-app.volumeValueRect.Top), 11, 600, theme.accent2, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
 }
 
@@ -4428,6 +4415,9 @@ func drawScenarioPage(hdc uintptr, body RECT, w int) {
 			cc = blendColor(cc, theme.accent2, .06*hv)
 		}
 		roundFill(hdc, rv, cc, 10)
+		if app.draggingScenarioKind == 1 && app.draggingScenarioIntoGroup && app.draggingScenarioTarget == dataIdx && ui2d.active {
+			d2dDrawRoundedOutline(rv, 10, 2, theme.accent2)
+		}
 		if cnd.Type == condGroup {
 			arrow := "▾"
 			if app.conditionGroupCollapsed[cnd.ID] {
@@ -4529,6 +4519,11 @@ func drawScenarioPage(hdc uintptr, body RECT, w int) {
 			}
 		}
 		if base.Right > base.Left {
+			if app.draggingScenarioKind == 1 && app.draggingScenarioParentID == "" {
+				x := app.scenarioListClip.Left + 3
+				d2dDrawLine(float32(x), float32(app.scenarioListClip.Top+4), float32(x), float32(app.scenarioListClip.Bottom-4), 2, theme.accent2)
+				drawText(hdc, "Без группы", int(x)+7, int(app.scenarioListClip.Top)+2, 94, 18, 9, 650, theme.accent2, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+			}
 			hh := (base.Bottom - base.Top) / 2
 			cy := app.draggingScenarioY
 			ghost := RECT{base.Left, cy - hh, base.Right, cy + hh}
@@ -6495,7 +6490,7 @@ func onMouseMove(hwnd uintptr, x, y int32) {
 				app.scenarioScrollTarget = clampFloat(app.scenarioScrollTarget+14, 0, maxPx)
 			}
 		}
-		updateScenarioDragTarget(y)
+		updateScenarioDragTarget(x, y)
 		invalidate(hwnd)
 	}
 	if app.draggingScrollKind != 0 {
@@ -8358,6 +8353,8 @@ func onClick(x, y int32) {
 			if pointIn(app.conditionDragRects[slot], x, y) {
 				app.selectedScenarioKind, app.selectedScenarioIndex = 1, i
 				app.draggingScenarioKind, app.draggingScenarioIndex, app.draggingScenarioTarget = 1, i, i
+				app.draggingScenarioParentID = conds[i].GroupID
+				app.draggingScenarioIntoGroup = false
 				app.draggingScenarioY = y
 				app.dragGapAnim = .12
 				pSetCapture.Call(app.hwnd)

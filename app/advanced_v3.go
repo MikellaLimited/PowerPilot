@@ -542,10 +542,29 @@ func toggleFavoriteTask(idx int) {
 	appendHistory("EDIT", "Избранное: "+app.settings.SavedTasks[idx].Name)
 }
 
-func updateScenarioDragTarget(y int32) {
+func updateScenarioDragTarget(x, y int32) {
 	if app.draggingScenarioKind == 1 {
 		items := currentScenarioConditions()
+		if app.draggingScenarioIndex < 0 || app.draggingScenarioIndex >= len(items) {
+			return
+		}
 		last := app.draggingScenarioIndex
+		app.draggingScenarioParentID = items[app.draggingScenarioIndex].GroupID
+		app.draggingScenarioIntoGroup = false
+		// The body of a compound row is an explicit drop zone. Dropping there
+		// assigns the dragged condition (or group) to that compound condition.
+		for slot, r := range app.conditionRows {
+			idx := app.conditionRowIndices[slot]
+			if idx < 0 || idx >= len(items) || idx == app.draggingScenarioIndex || items[idx].Type != condGroup || r.Right <= r.Left {
+				continue
+			}
+			if y >= r.Top && y <= r.Bottom && x >= r.Left && x <= r.Right && !conditionGroupWouldCycle(items, items[app.draggingScenarioIndex].ID, items[idx].ID) {
+				app.draggingScenarioTarget = idx
+				app.draggingScenarioParentID = items[idx].ID
+				app.draggingScenarioIntoGroup = true
+				return
+			}
+		}
 		for slot, r := range app.conditionRows {
 			idx := app.conditionRowIndices[slot]
 			if idx < 0 || idx >= len(items) || r.Right <= r.Left {
@@ -553,11 +572,21 @@ func updateScenarioDragTarget(y int32) {
 			}
 			last = idx
 			if y < (r.Top+r.Bottom)/2 {
-				app.draggingScenarioTarget = idx
-				return
+				last = idx
+				break
 			}
 		}
 		app.draggingScenarioTarget = last
+		parentID := items[last].GroupID
+		// Pulling a nested row into the left gutter explicitly removes it from
+		// every compound group. Dropping beside an ordinary row adopts that row's level.
+		if x <= app.scenarioListClip.Left+18 {
+			parentID = ""
+		}
+		item := items[app.draggingScenarioIndex]
+		if item.Type != condGroup || !conditionGroupWouldCycle(items, item.ID, parentID) {
+			app.draggingScenarioParentID = parentID
+		}
 	} else if app.draggingScenarioKind == 2 {
 		items := currentScenarioSteps()
 		last := app.draggingScenarioIndex
@@ -607,8 +636,10 @@ func moveStepTo(list []ActionStep, from, to int) []ActionStep {
 }
 func finishScenarioDrag() {
 	kind, from, to := app.draggingScenarioKind, app.draggingScenarioIndex, app.draggingScenarioTarget
+	parentID, intoGroup := app.draggingScenarioParentID, app.draggingScenarioIntoGroup
 	app.draggingScenarioKind = 0
 	app.draggingScenarioIndex, app.draggingScenarioTarget = -1, -1
+	app.draggingScenarioParentID, app.draggingScenarioIntoGroup = "", false
 	if from < 0 || to < 0 {
 		return
 	}
@@ -618,13 +649,11 @@ func finishScenarioDrag() {
 			return
 		}
 		item := list[from]
-		target := list[to]
-		parentID := target.GroupID
-		if target.Type == condGroup && target.ID != item.ID {
-			parentID = target.ID
-		}
 		if item.Type != condGroup || !conditionGroupWouldCycle(list, item.ID, parentID) {
 			list[from].GroupID = parentID
+		}
+		if intoGroup && from > to && to+1 < len(list) {
+			to++
 		}
 		if from != to {
 			list = moveConditionTo(list, from, to)
