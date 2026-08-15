@@ -1329,7 +1329,7 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		if wParam == 1 {
 			tick()
 			maybeCheckPowerPilotUpdates()
-			if temperatureProviderInstalled() && (app.temperatureUpdateLastCheck.IsZero() || time.Since(app.temperatureUpdateLastCheck) >= 3*time.Hour) {
+			if temperatureProviderInstalled() && (app.temperatureUpdateLastCheck.IsZero() || time.Since(app.temperatureUpdateLastCheck) >= 30*time.Minute) {
 				temperatureProviderState.RLock()
 				busy := temperatureProviderState.Checking || temperatureProviderState.Installing
 				temperatureProviderState.RUnlock()
@@ -4092,7 +4092,7 @@ func drawComponentsSettings(hdc uintptr, body RECT) {
 	drawSettingsUpdateCard(hdc, app.appUpdateRect, app.appUpdateActionRect, title, sub, updateAction, updateBusy)
 	textW := int(app.temperatureAutoUpdateRect.Right - app.temperatureAutoUpdateRect.Left)
 	drawText(hdc, "Проверка обновлений датчиков", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)-1, textW, 19, 11, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	drawText(hdc, "Автоматически при каждом запуске PowerPilot и затем каждые 3 часа. Установка найденного обновления запускается вручную и может запросить UAC.", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)+18, textW, 34, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
+	drawText(hdc, "Автоматически при каждом запуске PowerPilot и затем каждые 30 минут. Установка найденного обновления запускается вручную и может запросить UAC.", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)+18, textW, 34, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
 	infoY := int(app.temperatureAutoUpdateRect.Bottom) + 36
 	drawText(hdc, "Аппаратные показатели в «Ресурсы → Продвинутый монитор → Датчики» появляются после установки провайдера. Температуры также используются в обычных карточках ресурсов; для низкоуровневого доступа CPU и платы применяется PawnIO.", int(app.temperatureAutoUpdateRect.Left), infoY, textW, 38, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
 }
