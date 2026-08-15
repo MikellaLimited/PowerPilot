@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,6 +22,7 @@ var resourceSensorCategories = []struct {
 	Label string
 	Type  string
 }{
+	{"Все", "**"},
 	{"Температуры", "Temperature"},
 	{"Напряжения", "Voltage"},
 	{"Вентиляторы", "Fan"},
@@ -31,8 +33,8 @@ var resourceSensorCategories = []struct {
 }
 
 func hardwareSensorIsPrimaryType(t string) bool {
-	for i := 0; i < len(resourceSensorCategories)-1; i++ {
-		if strings.EqualFold(t, resourceSensorCategories[i].Type) {
+	for _, category := range resourceSensorCategories {
+		if category.Type != "*" && category.Type != "**" && strings.EqualFold(t, category.Type) {
 			return true
 		}
 	}
@@ -51,7 +53,10 @@ func filteredHardwareSensors() []HardwareSensor {
 		if strings.EqualFold(s.SensorType, "Current") {
 			continue
 		}
-		if want == "*" {
+		if want == "**" {
+			// The All view keeps every supported sensor type and adds a second
+			// hierarchy level below each hardware component.
+		} else if want == "*" {
 			if hardwareSensorIsPrimaryType(s.SensorType) {
 				continue
 			}
@@ -69,6 +74,9 @@ func filteredHardwareSensors() []HardwareSensor {
 		if ka != kb {
 			return ka < kb
 		}
+		if want == "**" && !strings.EqualFold(a.SensorType, b.SensorType) {
+			return strings.ToLower(a.SensorType) < strings.ToLower(b.SensorType)
+		}
 		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
 	})
 	return out
@@ -81,6 +89,8 @@ type hardwareSensorDisplayRow struct {
 	Expanded bool
 	IsGroup  bool
 	Sensor   HardwareSensor
+	Level    int
+	Label    string
 }
 
 func hardwareSensorComponentKey(s HardwareSensor) string {
@@ -103,23 +113,63 @@ func hardwareSensorDisplayRows() []hardwareSensorDisplayRow {
 	if app.resourceSensorExpanded == nil {
 		app.resourceSensorExpanded = map[string]bool{}
 	}
-	rows := make([]hardwareSensorDisplayRow, 0, len(sensors)+8)
+	rows := make([]hardwareSensorDisplayRow, 0, len(sensors)+16)
+	allView := app.resourceSensorView == 0
 	for i := 0; i < len(sensors); {
 		key := hardwareSensorComponentKey(sensors[i])
 		j := i + 1
 		for j < len(sensors) && hardwareSensorComponentKey(sensors[j]) == key {
 			j++
 		}
-		expanded := app.resourceSensorExpanded[key]
-		rows = append(rows, hardwareSensorDisplayRow{GroupKey: key, Hardware: sensors[i].Hardware, Count: j - i, Expanded: expanded, IsGroup: true})
+		expanded, known := app.resourceSensorExpanded[key]
+		if allView && !known {
+			expanded = true
+			app.resourceSensorExpanded[key] = true
+		}
+		rows = append(rows, hardwareSensorDisplayRow{GroupKey: key, Hardware: sensors[i].Hardware, Label: sensors[i].Hardware, Count: j - i, Expanded: expanded, IsGroup: true})
 		if expanded {
-			for k := i; k < j; k++ {
-				rows = append(rows, hardwareSensorDisplayRow{GroupKey: key, Hardware: sensors[k].Hardware, Sensor: sensors[k]})
+			if allView {
+				for k := i; k < j; {
+					typeName := sensors[k].SensorType
+					m := k + 1
+					for m < j && strings.EqualFold(sensors[m].SensorType, typeName) {
+						m++
+					}
+					typeKey := key + "|type:" + strings.ToLower(typeName)
+					typeExpanded, typeKnown := app.resourceSensorExpanded[typeKey]
+					if !typeKnown {
+						typeExpanded = true
+						app.resourceSensorExpanded[typeKey] = true
+					}
+					rows = append(rows, hardwareSensorDisplayRow{GroupKey: typeKey, Hardware: sensors[k].Hardware, Label: hardwareSensorTypeLabel(typeName), Count: m - k, Expanded: typeExpanded, IsGroup: true, Level: 1})
+					if typeExpanded {
+						for n := k; n < m; n++ {
+							rows = append(rows, hardwareSensorDisplayRow{GroupKey: typeKey, Hardware: sensors[n].Hardware, Sensor: sensors[n], Level: 2})
+						}
+					}
+					k = m
+				}
+			} else {
+				for k := i; k < j; k++ {
+					rows = append(rows, hardwareSensorDisplayRow{GroupKey: key, Hardware: sensors[k].Hardware, Sensor: sensors[k], Level: 1})
+				}
 			}
 		}
 		i = j
 	}
 	return rows
+}
+
+func hardwareSensorTypeLabel(sensorType string) string {
+	for _, category := range resourceSensorCategories {
+		if category.Type != "*" && category.Type != "**" && strings.EqualFold(category.Type, sensorType) {
+			return category.Label
+		}
+	}
+	if strings.TrimSpace(sensorType) == "" {
+		return "Другие показатели"
+	}
+	return sensorType
 }
 
 func layoutAdvancedResourceMonitor(bodyTop, bodyBottom, innerLeft, innerRight int) {
@@ -143,7 +193,15 @@ func layoutAdvancedResourceMonitor(bodyTop, bodyBottom, innerLeft, innerRight in
 	}
 	clipTop := tabY + 42
 	if app.resourceAdvancedView == 0 {
-		y := tabY + 42
+		searchY := tabY + 42
+		app.resourceProcessSearchRect = RECT{int32(innerLeft), int32(searchY), int32(innerRight), int32(searchY + 34)}
+		move(app.edits[idResourceSearch], innerLeft+10, searchY+8, innerRight-innerLeft-20, 19)
+		if app.notificationPanelOpen || app.taskMenuOpen || app.resourceMenuOpen {
+			pShowWindow.Call(app.edits[idResourceSearch], SW_HIDE)
+		} else {
+			pShowWindow.Call(app.edits[idResourceSearch], SW_SHOW)
+		}
+		y := searchY + 44
 		available := innerRight - innerLeft
 		nameW := max(150, available*30/100)
 		metricW := max(58, (available-nameW-gap*5)/5)
@@ -160,6 +218,8 @@ func layoutAdvancedResourceMonitor(bodyTop, bodyBottom, innerLeft, innerRight in
 		}
 		clipTop = y + 44
 	} else {
+		app.resourceProcessSearchRect = RECT{}
+		pShowWindow.Call(app.edits[idResourceSearch], SW_HIDE)
 		// Sensor categories live inside the advanced monitor. Two compact rows keep
 		// all major hardware families visible without turning the page into a menu.
 		catGap := 6
@@ -216,7 +276,7 @@ func layoutResourceStatistics(bodyTop, bodyBottom, innerLeft, innerRight int) {
 	for i := range app.resourceStatsGraphRects {
 		app.resourceStatsGraphRects[i] = RECT{}
 	}
-	if app.resourceStatsView == 0 {
+	if app.resourceStatsView == 0 || app.resourceStatsView == 1 {
 		graphY := viewY + 40
 		graphGap := 5
 		graphW := (innerRight - innerLeft - graphGap*5) / 6
@@ -237,6 +297,7 @@ func resourceProcessScrollMax() float64 {
 func filteredResourceProcesses() []ProcessMetric {
 	list := processMetricSnapshot()
 	out := make([]ProcessMetric, 0, len(list))
+	query := strings.ToLower(strings.TrimSpace(app.resourceProcessSearchText))
 	for _, p := range list {
 		if p.System && !app.settings.ShowSystemProcesses {
 			continue
@@ -246,6 +307,9 @@ func filteredResourceProcesses() []ProcessMetric {
 			if p.CPUPercent <= 0 && p.GPUPercent <= 0 && p.RAMMB <= 0 && disk <= 0 && p.OtherKBps <= 0 {
 				continue
 			}
+		}
+		if query != "" && !strings.Contains(strings.ToLower(p.Name), query) && !strings.Contains(strconv.FormatUint(uint64(p.PID), 10), query) {
+			continue
 		}
 		out = append(out, p)
 	}
@@ -304,6 +368,7 @@ func drawAdvancedResourceMonitor(hdc uintptr, body RECT, w int) {
 		drawAdvancedSensorMonitor(hdc, body)
 		return
 	}
+	roundFill(hdc, app.resourceProcessSearchRect, surfaceButtonColor(), 9)
 
 	sub := "Несистемные процессы"
 	if app.settings.ShowSystemProcesses {
@@ -501,15 +566,31 @@ func drawAdvancedSensorMonitor(hdc uintptr, body RECT) {
 			if row.Expanded {
 				arrow = "▼"
 			}
-			drawText(hdc, arrow, left+8, y, 18, h, 10, 700, theme.accent2, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-			drawText(hdc, row.Hardware, left+30, y, deviceW+sensorW-42, h, 10, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+			indent := row.Level * 22
+			drawText(hdc, arrow, left+8+indent, y, 18, h, 10, 700, theme.accent2, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+			label := row.Label
+			if label == "" {
+				label = row.Hardware
+			}
+			labelColor := theme.text
+			weight := 650
+			if row.Level > 0 {
+				labelColor = theme.accent2
+				weight = 600
+			}
+			drawText(hdc, label, left+30+indent, y, deviceW+sensorW-42-indent, h, 10, weight, labelColor, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 			countText := fmt.Sprintf("Датчиков: %d", row.Count)
 			drawText(hdc, countText, left+deviceW+sensorW, y, right-(left+deviceW+sensorW)-10, h, 9, 500, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 			continue
 		}
 		sensor := row.Sensor
-		drawText(hdc, "↳", left+12, y, 18, h, 9, 600, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-		drawText(hdc, sensor.Hardware, left+34, y, deviceW-40, h, 8, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		indent := row.Level * 18
+		drawText(hdc, "↳", left+12+indent, y, 18, h, 9, 600, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+		componentText := sensor.Hardware
+		if row.Level >= 2 {
+			componentText = hardwareSensorTypeLabel(sensor.SensorType)
+		}
+		drawText(hdc, componentText, left+34+indent, y, deviceW-40-indent, h, 8, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 		drawText(hdc, sensor.Name, left+deviceW+8, y, sensorW-14, h, 9, 500, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 		drawText(hdc, hardwareSensorValueText(sensor, 0), left+deviceW+sensorW, y, valueW-4, h, 9, 700, theme.accent2, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 		drawText(hdc, hardwareSensorValueText(sensor, 1), left+deviceW+sensorW+valueW, y, valueW-4, h, 9, 550, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
@@ -671,6 +752,45 @@ func formatActivitySeconds(v float64) string {
 	return fmt.Sprintf("%dм", m)
 }
 
+func sortResourceStatsApps(apps []AppResourceStat, view, key int, desc bool) {
+	less := func(a, b AppResourceStat) bool {
+		if key == 0 {
+			return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+		}
+		av, bv := 0.0, 0.0
+		switch view {
+		case 2:
+			valuesA := []float64{0, a.CPU, a.GPU, a.RAMMB, a.ReadKBps + a.WriteKBps, a.NetworkKBps}
+			valuesB := []float64{0, b.CPU, b.GPU, b.RAMMB, b.ReadKBps + b.WriteKBps, b.NetworkKBps}
+			av, bv = valuesA[clampInt(key, 0, 5)], valuesB[clampInt(key, 0, 5)]
+		case 3:
+			av, bv = a.TrafficKB, b.TrafficKB
+		case 4:
+			av, bv = a.ActiveSeconds, b.ActiveSeconds
+		}
+		if av == bv {
+			return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+		}
+		return av < bv
+	}
+	sort.SliceStable(apps, func(i, j int) bool {
+		if desc {
+			return less(apps[j], apps[i])
+		}
+		return less(apps[i], apps[j])
+	})
+}
+
+func statsSortLabel(label string, key int) string {
+	if app.resourceStatsSort != key {
+		return label
+	}
+	if app.resourceStatsSortDesc {
+		return label + " ↓"
+	}
+	return label + " ↑"
+}
+
 func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 	drawText(hdc, "Статистика ресурсов", int(body.Left)+18, int(body.Top)+12, 300, 30, 20, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	periodLabels := []string{"1ч", "6ч", "24ч", "7д", "30д", "90д", "1 год", "Всё время"}
@@ -699,7 +819,7 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 		longTerm = true
 	}
 	y := int(app.resourceStatsViewRects[0].Bottom) + 12
-	if app.resourceStatsView == 0 && app.resourceStatsGraphRects[0].Right > app.resourceStatsGraphRects[0].Left {
+	if (app.resourceStatsView == 0 || app.resourceStatsView == 1) && app.resourceStatsGraphRects[0].Right > app.resourceStatsGraphRects[0].Left {
 		graphLabels := []string{"Общий", "CPU", "GPU", "RAM", "Диск", "Сеть"}
 		for i, r := range app.resourceStatsGraphRects {
 			drawSelectableButton(hdc, r, graphLabels[i], app.resourceStatsGraphMode == i)
@@ -725,7 +845,7 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 		drawText(hdc, "Средняя активность по часу суток", int(body.Left)+18, y, 360, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		y += 26
 		r := RECT{body.Left + 18, int32(y), body.Right - 18, int32(min(int(body.Bottom)-20, y+260))}
-		drawStatsByHourGraph(hdc, r, samples)
+		drawStatsByHourGraph(hdc, r, samples, app.resourceStatsGraphMode)
 		return
 	}
 	if app.resourceStatsView >= 2 && app.resourceStatsView <= 4 {
@@ -734,6 +854,10 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 			return
 		}
 		apps := append([]AppResourceStat(nil), sum.apps...)
+		sortResourceStatsApps(apps, app.resourceStatsView, app.resourceStatsSort, app.resourceStatsSortDesc)
+		for i := range app.resourceStatsSortRects {
+			app.resourceStatsSortRects[i] = RECT{}
+		}
 		left := int(body.Left) + 18
 		right := int(body.Right) - 18
 		if app.resourceStatsView == 2 {
@@ -755,11 +879,8 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 				}
 			}
 			for i, h := range headers {
-				flags := uint32(DT_CENTER | DT_VCENTER | DT_SINGLELINE)
-				if i == 0 {
-					flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE
-				}
-				drawText(hdc, h, xs[i]+2, y, ws[i]-4, 20, 8, 650, theme.muted, flags)
+				app.resourceStatsSortRects[i] = RECT{int32(xs[i]), int32(y - 2), int32(xs[i] + ws[i]), int32(y + 22)}
+				drawSelectableButton(hdc, app.resourceStatsSortRects[i], statsSortLabel(h, i), app.resourceStatsSort == i)
 			}
 			y += 24
 			for _, a := range apps {
@@ -784,13 +905,14 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 			return
 		}
 		if app.resourceStatsView == 3 {
-			sort.Slice(apps, func(i, j int) bool { return apps[i].TrafficKB > apps[j].TrafficKB })
 			drawText(hdc, "Потраченный интернет-трафик приложениями", left, y, right-left, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 			drawText(hdc, "Всего за период: "+formatTrafficKB(sum.appTrafficKB), left, y+21, right-left, 18, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 			y += 50
 			nameW := max(220, (right-left)*56/100)
-			drawText(hdc, "Приложение", left+4, y, nameW-8, 20, 8, 650, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-			drawText(hdc, "Потрачено", left+nameW, y, right-left-nameW, 20, 8, 650, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
+			app.resourceStatsSortRects[0] = RECT{int32(left), int32(y - 2), int32(left + nameW), int32(y + 22)}
+			app.resourceStatsSortRects[1] = RECT{int32(left + nameW), int32(y - 2), int32(right), int32(y + 22)}
+			drawSelectableButton(hdc, app.resourceStatsSortRects[0], statsSortLabel("Приложение", 0), app.resourceStatsSort == 0)
+			drawSelectableButton(hdc, app.resourceStatsSortRects[1], statsSortLabel("Потрачено", 1), app.resourceStatsSort == 1)
 			y += 24
 			for _, a := range apps {
 				if y+38 > int(body.Bottom)-10 {
@@ -804,13 +926,14 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 			}
 			return
 		}
-		sort.Slice(apps, func(i, j int) bool { return apps[i].ActiveSeconds > apps[j].ActiveSeconds })
 		drawText(hdc, "Активность приложений", left, y, right-left, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		drawText(hdc, "Приблизительное время, когда приложение было активным окном.", left, y+21, right-left, 18, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 		y += 50
 		nameW := max(220, (right-left)*56/100)
-		drawText(hdc, "Приложение", left+4, y, nameW-8, 20, 8, 650, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-		drawText(hdc, "Активность", left+nameW, y, right-left-nameW, 20, 8, 650, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
+		app.resourceStatsSortRects[0] = RECT{int32(left), int32(y - 2), int32(left + nameW), int32(y + 22)}
+		app.resourceStatsSortRects[1] = RECT{int32(left + nameW), int32(y - 2), int32(right), int32(y + 22)}
+		drawSelectableButton(hdc, app.resourceStatsSortRects[0], statsSortLabel("Приложение", 0), app.resourceStatsSort == 0)
+		drawSelectableButton(hdc, app.resourceStatsSortRects[1], statsSortLabel("Активность", 1), app.resourceStatsSort == 1)
 		y += 24
 		for _, a := range apps {
 			if y+38 > int(body.Bottom)-10 {
@@ -851,15 +974,15 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 	drawStatsHistoryGraph(hdc, graphR, samples, app.resourceStatsGraphMode)
 }
 
-func drawStatsByHourGraph(hdc uintptr, r RECT, samples []ResourceStatSample) {
+func drawStatsByHourGraph(hdc uintptr, r RECT, samples []ResourceStatSample, mode int) {
 	roundFill(hdc, r, blendColor(surfacePanelColor(), surfaceButtonColor(), .42), 12)
 	if len(samples) == 0 {
 		drawText(hdc, "Для этой выборки пока нет данных.", int(r.Left)+12, int(r.Top), int(r.Right-r.Left)-24, int(r.Bottom-r.Top), 10, 400, theme.muted, DT_CENTER|DT_VCENTER)
 		return
 	}
 	type bucket struct {
-		cpu, gpu, ram, disk float64
-		n                   int
+		cpu, gpu, ram, disk, network float64
+		n                            int
 	}
 	var b [24]bucket
 	for _, s := range samples {
@@ -868,15 +991,35 @@ func drawStatsByHourGraph(hdc uintptr, r RECT, samples []ResourceStatSample) {
 		b[h].gpu += s.GPU
 		b[h].ram += s.RAM
 		b[h].disk += s.Disk
+		b[h].network += s.NetworkKBps
 		b[h].n++
 	}
-	plot := RECT{r.Left + 34, r.Top + 26, r.Right - 12, r.Bottom - 28}
+	plot := RECT{r.Left + 50, r.Top + 26, r.Right - 12, r.Bottom - 28}
+	yMax := 100.0
+	if mode == 5 {
+		yMax = 1
+		for _, bucket := range b {
+			if bucket.n > 0 {
+				yMax = math.Max(yMax, bucket.network/float64(bucket.n))
+			}
+		}
+	}
 	for k := 0; k <= 4; k++ {
 		yy := float32(plot.Top) + float32(plot.Bottom-plot.Top)*float32(k)/4
 		d2dDrawLine(float32(plot.Left), yy, float32(plot.Right), yy, .45, blendColor(theme.border, theme.muted, .18))
+		value := yMax * (1 - float64(k)/4)
+		label := fmt.Sprintf("%.0f%%", value)
+		if mode == 5 {
+			label = formatRateValueKB(value)
+		}
+		drawText(hdc, label, int(r.Left)+4, int(yy)-8, 42, 16, 8, 400, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 	}
-	cols := []uint32{theme.accent, rgb(235, 145, 72), theme.success, theme.accent2}
-	for si := 0; si < 4; si++ {
+	cols := []uint32{theme.accent, rgb(235, 145, 72), theme.success, theme.accent2, theme.accent}
+	seriesIndices := []int{0, 1, 2, 3}
+	if mode > 0 {
+		seriesIndices = []int{mode - 1}
+	}
+	for _, si := range seriesIndices {
 		last := false
 		var lx, ly float32
 		for h := 0; h < 24; h++ {
@@ -884,9 +1027,9 @@ func drawStatsByHourGraph(hdc uintptr, r RECT, samples []ResourceStatSample) {
 				last = false
 				continue
 			}
-			vals := []float64{b[h].cpu / float64(b[h].n), b[h].gpu / float64(b[h].n), b[h].ram / float64(b[h].n), b[h].disk / float64(b[h].n)}
+			vals := []float64{b[h].cpu / float64(b[h].n), b[h].gpu / float64(b[h].n), b[h].ram / float64(b[h].n), b[h].disk / float64(b[h].n), b[h].network / float64(b[h].n)}
 			x := float32(plot.Left) + float32(plot.Right-plot.Left)*float32(h)/23
-			yy := float32(plot.Bottom) - float32(plot.Bottom-plot.Top)*float32(clampFloat(vals[si], 0, 100)/100)
+			yy := float32(plot.Bottom) - float32(plot.Bottom-plot.Top)*float32(clampFloat(vals[si], 0, yMax)/yMax)
 			if last {
 				d2dDrawLine(lx, ly, x, yy, 1.5, cols[si])
 			}
@@ -901,9 +1044,15 @@ func drawStatsByHourGraph(hdc uintptr, r RECT, samples []ResourceStatSample) {
 	legend := []struct {
 		n string
 		c uint32
-	}{{"CPU", cols[0]}, {"GPU", cols[1]}, {"RAM", cols[2]}, {"Диск", cols[3]}}
+	}{{"CPU", cols[0]}, {"GPU", cols[1]}, {"RAM", cols[2]}, {"Диск", cols[3]}, {"Сеть", cols[4]}}
 	lx := int(r.Left) + 12
-	for _, v := range legend {
+	for i, v := range legend {
+		if mode == 0 && i == 4 {
+			continue
+		}
+		if mode > 0 && i != mode-1 {
+			continue
+		}
 		drawText(hdc, v.n, lx, int(r.Top)+5, 45, 16, 8, 600, v.c, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		lx += 46
 	}
@@ -956,7 +1105,7 @@ func drawStatsHistoryGraph(hdc uintptr, r RECT, samples []ResourceStatSample, mo
 		drawText(hdc, "История появится после накопления измерений.", int(r.Left)+12, int(r.Top), int(r.Right-r.Left)-24, int(r.Bottom-r.Top), 10, 400, theme.muted, DT_CENTER|DT_VCENTER)
 		return
 	}
-	plot := RECT{r.Left + 10, r.Top + 20, r.Right - 10, r.Bottom - 30}
+	plot := RECT{r.Left + 50, r.Top + 20, r.Right - 10, r.Bottom - 30}
 	for k := 1; k <= 3; k++ {
 		yy := float32(plot.Top) + float32(plot.Bottom-plot.Top)*float32(k)/4
 		d2dDrawLine(float32(plot.Left), yy, float32(plot.Right), yy, .45, blendColor(theme.border, theme.muted, .18))
@@ -995,6 +1144,19 @@ func drawStatsHistoryGraph(hdc uintptr, r RECT, samples []ResourceStatSample, mo
 		series = []ser{mk("Сеть", theme.accent, mx, func(s ResourceStatSample) float64 { return s.NetworkKBps })}
 	default:
 		series = []ser{mk("CPU", theme.accent, 100, func(s ResourceStatSample) float64 { return s.CPU }), mk("GPU", gpuColor, 100, func(s ResourceStatSample) float64 { return s.GPU }), mk("RAM", theme.success, 100, func(s ResourceStatSample) float64 { return s.RAM }), mk("Диск", theme.accent2, 100, func(s ResourceStatSample) float64 { return s.Disk })}
+	}
+	axisMax := 100.0
+	if mode == 5 && len(series) > 0 {
+		axisMax = series[0].max
+	}
+	for k := 0; k <= 4; k++ {
+		yy := float32(plot.Top) + float32(plot.Bottom-plot.Top)*float32(k)/4
+		value := axisMax * (1 - float64(k)/4)
+		label := fmt.Sprintf("%.0f%%", value)
+		if mode == 5 {
+			label = formatRateValueKB(value)
+		}
+		drawText(hdc, label, int(r.Left)+4, int(yy)-8, 42, 16, 8, 400, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 	}
 	startAt, endAt := samples[0].At, samples[len(samples)-1].At
 	span := endAt.Sub(startAt)

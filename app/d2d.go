@@ -84,8 +84,8 @@ type d2dRenderer struct {
 	bellBrush       uintptr
 	appBitmap       uintptr
 	appBrush        uintptr
-	scenarioBitmaps [4]uintptr
-	scenarioBrushes [4]uintptr
+	scenarioBitmaps [5]uintptr
+	scenarioBrushes [5]uintptr
 	active          bool
 }
 
@@ -596,6 +596,7 @@ const (
 	scenarioIconPasteAll
 	scenarioIconCopy
 	scenarioIconDelete
+	scenarioIconPause
 )
 
 func d2dEnsureScenarioIcon(kind int) bool {
@@ -605,7 +606,7 @@ func d2dEnsureScenarioIcon(kind int) bool {
 	if ui2d.scenarioBrushes[kind] != 0 {
 		return true
 	}
-	data := [][]byte{pastePNGData, pasteAllPNGData, copyPNGData, deletePNGData}[kind]
+	data := [][]byte{pastePNGData, pasteAllPNGData, copyPNGData, deletePNGData, pausePNGData}[kind]
 	bmp, brush := d2dCreateImageBrush(data, 22, 22)
 	if bmp == 0 || brush == 0 {
 		return false

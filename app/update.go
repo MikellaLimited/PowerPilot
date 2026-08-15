@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,7 +18,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -368,6 +371,7 @@ func downloadAndApplyPowerPilotUpdateAsync() {
 			powerPilotUpdateState.LastError = err.Error()
 			powerPilotUpdateState.Unlock()
 			pushAppNotification(notifError, "Не удалось обновить PowerPilot", err.Error(), notifTargetData)
+			techLog040("PowerPilot update failed: " + err.Error())
 			invalidate(app.hwnd)
 		}
 
@@ -474,17 +478,27 @@ func downloadAndApplyPowerPilotUpdateAsync() {
 			return
 		}
 		appPath, _ = filepath.Abs(appPath)
-		cmd := exec.Command(updaterPath,
+		args := []string{
 			"--package", finalPath,
 			"--app", appPath,
 			"--pid", strconv.Itoa(os.Getpid()),
 			"--version", latest,
 			"--old-version", currentPowerPilotVersion(),
-		)
+		}
+		cmd := exec.Command(updaterPath, args...)
 		cmd.Dir = dir
 		if err := cmd.Start(); err != nil {
-			fail(fmt.Errorf("не удалось запустить модуль обновления: %v", err))
-			return
+			if !errors.Is(err, syscall.Errno(740)) {
+				fail(fmt.Errorf("не удалось запустить модуль обновления: %v", err))
+				return
+			}
+			if err := launchUpdaterElevated(updaterPath, dir, args); err != nil {
+				fail(fmt.Errorf("не удалось запустить модуль обновления через UAC: %v", err))
+				return
+			}
+			techLog040("PowerPilot updater requested elevation and was launched through UAC")
+		} else {
+			techLog040("PowerPilot updater launched without elevation")
 		}
 		powerPilotUpdateState.Lock()
 		powerPilotUpdateState.Downloading = false
@@ -496,6 +510,27 @@ func downloadAndApplyPowerPilotUpdateAsync() {
 		app.exiting = true
 		pSendMessageW.Call(app.hwnd, WM_CLOSE, 0, 0)
 	}()
+}
+
+func launchUpdaterElevated(updaterPath, dir string, args []string) error {
+	verb, _ := syscall.UTF16PtrFromString("runas")
+	file, _ := syscall.UTF16PtrFromString(updaterPath)
+	params, _ := syscall.UTF16PtrFromString(strings.Join(escapeWindowsArgs(args), " "))
+	workDir, _ := syscall.UTF16PtrFromString(dir)
+	shellExecute := shell32.NewProc("ShellExecuteW")
+	r, _, callErr := shellExecute.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(file)), uintptr(unsafe.Pointer(params)), uintptr(unsafe.Pointer(workDir)), SW_HIDE)
+	if r <= 32 {
+		return fmt.Errorf("ShellExecuteW code %d: %v", r, callErr)
+	}
+	return nil
+}
+
+func escapeWindowsArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, arg := range args {
+		out[i] = syscall.EscapeArg(arg)
+	}
+	return out
 }
 
 func extractPowerPilotUpdater(packagePath, dir string) (string, error) {
