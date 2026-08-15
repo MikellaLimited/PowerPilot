@@ -277,8 +277,15 @@ func buildDiagnosticReport(dry bool) []DiagnosticLine {
 	}
 	vals := make([]bool, 0, len(conds))
 	enabled := make([]AutomationCondition, 0, len(conds))
+	valuesByID := make(map[string]bool, len(conds))
+	hasGroups := false
 	for _, c := range conds {
 		if !c.Enabled {
+			continue
+		}
+		if c.Type == condGroup {
+			hasGroups = true
+			lines = append(lines, DiagnosticLine{diagInfo, "Составное условие", "Группа вычисляется по вложенным условиям"})
 			continue
 		}
 		ok, detail := diagnoseCondition(c)
@@ -296,9 +303,13 @@ func buildDiagnosticReport(dry bool) []DiagnosticLine {
 		lines = append(lines, DiagnosticLine{lvl, title, detail})
 		vals = append(vals, ok)
 		enabled = append(enabled, c)
+		valuesByID[c.ID] = ok
 	}
-	if len(enabled) > 0 {
+	if len(enabled) > 0 || hasGroups {
 		ok := evalGroupedConditionValues(enabled, vals)
+		if hasGroups {
+			ok, _ = evalCompoundConditionValues(conds, valuesByID, "", map[string]bool{})
+		}
 		lvl := diagWait
 		if ok {
 			lvl = diagOK
@@ -598,7 +609,7 @@ func finishScenarioDrag() {
 	kind, from, to := app.draggingScenarioKind, app.draggingScenarioIndex, app.draggingScenarioTarget
 	app.draggingScenarioKind = 0
 	app.draggingScenarioIndex, app.draggingScenarioTarget = -1, -1
-	if from == to || from < 0 || to < 0 {
+	if from < 0 || to < 0 {
 		return
 	}
 	if kind == 1 {
@@ -606,7 +617,18 @@ func finishScenarioDrag() {
 		if from >= len(list) || to >= len(list) {
 			return
 		}
-		list = moveConditionTo(list, from, to)
+		item := list[from]
+		target := list[to]
+		parentID := target.GroupID
+		if target.Type == condGroup && target.ID != item.ID {
+			parentID = target.ID
+		}
+		if item.Type != condGroup || !conditionGroupWouldCycle(list, item.ID, parentID) {
+			list[from].GroupID = parentID
+		}
+		if from != to {
+			list = moveConditionTo(list, from, to)
+		}
 		setCurrentScenarioConditions(list)
 		resetConditionRuntimes()
 		if !app.scenarioSavedDraft {

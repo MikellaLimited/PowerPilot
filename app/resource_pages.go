@@ -919,6 +919,37 @@ func formatGraphTimeTick(t time.Time, span time.Duration) string {
 	return t.Format("15:04:05")
 }
 
+func formatRelativeGraphTick(remaining time.Duration) string {
+	if remaining <= time.Second {
+		return "0"
+	}
+	remaining = remaining.Round(time.Second)
+	if remaining >= time.Hour {
+		h := int(remaining / time.Hour)
+		m := int((remaining % time.Hour) / time.Minute)
+		if m > 0 {
+			return fmt.Sprintf("−%dч %dм", h, m)
+		}
+		return fmt.Sprintf("−%dч", h)
+	}
+	if remaining >= time.Minute {
+		m := int(remaining / time.Minute)
+		s := int((remaining % time.Minute) / time.Second)
+		if s > 0 {
+			return fmt.Sprintf("−%dм %dс", m, s)
+		}
+		return fmt.Sprintf("−%dм", m)
+	}
+	return fmt.Sprintf("−%dс", int(remaining/time.Second))
+}
+
+func resourceGraphTimeTick(t, end time.Time, span time.Duration) string {
+	if app.settings.ResourceTimelineMode == 1 {
+		return formatRelativeGraphTick(end.Sub(t))
+	}
+	return formatGraphTimeTick(t, span)
+}
+
 func drawStatsHistoryGraph(hdc uintptr, r RECT, samples []ResourceStatSample, mode int) {
 	roundFill(hdc, r, blendColor(surfacePanelColor(), surfaceButtonColor(), .42), 12)
 	if len(samples) < 2 {
@@ -983,10 +1014,13 @@ func drawStatsHistoryGraph(hdc uintptr, r RECT, samples []ResourceStatSample, mo
 			d2dDrawLine(x1, y1, x2, y2, 1.5, se.color)
 		}
 	}
-	for i := 0; i < 3; i++ {
-		f := float64(i) / 2
+	for i := 0; i < 5; i++ {
+		f := float64(i) / 4
 		tm := startAt.Add(time.Duration(float64(span) * f))
 		x := int(plot.Left) + int(float64(plot.Right-plot.Left)*f)
+		if i > 0 && i < 4 {
+			d2dDrawLine(float32(x), float32(plot.Top), float32(x), float32(plot.Bottom), .45, blendColor(theme.border, theme.muted, .16))
+		}
 		flags := uint32(DT_CENTER | DT_VCENTER | DT_SINGLELINE)
 		x0, ww := x-45, 90
 		if i == 0 {
@@ -994,12 +1028,12 @@ func drawStatsHistoryGraph(hdc uintptr, r RECT, samples []ResourceStatSample, mo
 			x0 = int(plot.Left)
 			ww = 100
 		}
-		if i == 2 {
+		if i == 4 {
 			flags = DT_RIGHT | DT_VCENTER | DT_SINGLELINE
 			x0 = int(plot.Right) - 100
 			ww = 100
 		}
-		drawText(hdc, formatGraphTimeTick(tm, span), x0, int(plot.Bottom)+5, ww, 16, 8, 400, theme.muted, flags)
+		drawText(hdc, resourceGraphTimeTick(tm, endAt, span), x0, int(plot.Bottom)+5, ww, 16, 8, 400, theme.muted, flags)
 	}
 	lx := int(r.Left) + 12
 	for _, se := range series {

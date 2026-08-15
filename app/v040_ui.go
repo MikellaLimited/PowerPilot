@@ -100,7 +100,7 @@ func getExecVisual040() visualSnapshot040 {
 
 func drawScenarioPreview040(hdc uintptr, body RECT) {
 	drawButton(hdc, app.previewBackRect, "← Назад", false)
-	drawText(hdc, "Предпросмотр блок-схемы", int(body.Left)+144, int(body.Top)+18, int(body.Right-body.Left)-168, 30, 19, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Предпросмотр блок-схемы", int(body.Left)+144, int(body.Top)+18, int(body.Right-body.Left)-288, 30, 19, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	conds := currentScenarioConditions()
 	steps := currentScenarioSteps()
 	vs := getExecVisual040()

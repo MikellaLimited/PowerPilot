@@ -73,18 +73,20 @@ type d2dTextKey struct {
 }
 
 type d2dRenderer struct {
-	factory        uintptr
-	target         uintptr
-	dwrite         uintptr
-	brushes        map[uint32]uintptr
-	textFormats    map[d2dTextKey]uintptr
-	settingsBitmap uintptr
-	settingsBrush  uintptr
-	bellBitmap     uintptr
-	bellBrush      uintptr
-	appBitmap      uintptr
-	appBrush       uintptr
-	active         bool
+	factory         uintptr
+	target          uintptr
+	dwrite          uintptr
+	brushes         map[uint32]uintptr
+	textFormats     map[d2dTextKey]uintptr
+	settingsBitmap  uintptr
+	settingsBrush   uintptr
+	bellBitmap      uintptr
+	bellBrush       uintptr
+	appBitmap       uintptr
+	appBrush        uintptr
+	scenarioBitmaps [4]uintptr
+	scenarioBrushes [4]uintptr
+	active          bool
 }
 
 var ui2d d2dRenderer
@@ -225,6 +227,16 @@ func d2dReleaseTargetResources() {
 	if ui2d.appBitmap != 0 {
 		comRelease(ui2d.appBitmap)
 		ui2d.appBitmap = 0
+	}
+	for i := range ui2d.scenarioBrushes {
+		if ui2d.scenarioBrushes[i] != 0 {
+			comRelease(ui2d.scenarioBrushes[i])
+			ui2d.scenarioBrushes[i] = 0
+		}
+		if ui2d.scenarioBitmaps[i] != 0 {
+			comRelease(ui2d.scenarioBitmaps[i])
+			ui2d.scenarioBitmaps[i] = 0
+		}
 	}
 	if ui2d.target != 0 {
 		comRelease(ui2d.target)
@@ -577,6 +589,36 @@ func d2dEnsureBellIcon() bool {
 	}
 	ui2d.bellBitmap, ui2d.bellBrush = bmp, brush
 	return true
+}
+
+const (
+	scenarioIconPaste = iota
+	scenarioIconPasteAll
+	scenarioIconCopy
+	scenarioIconDelete
+)
+
+func d2dEnsureScenarioIcon(kind int) bool {
+	if kind < 0 || kind >= len(ui2d.scenarioBrushes) {
+		return false
+	}
+	if ui2d.scenarioBrushes[kind] != 0 {
+		return true
+	}
+	data := [][]byte{pastePNGData, pasteAllPNGData, copyPNGData, deletePNGData}[kind]
+	bmp, brush := d2dCreateImageBrush(data, 22, 22)
+	if bmp == 0 || brush == 0 {
+		return false
+	}
+	ui2d.scenarioBitmaps[kind], ui2d.scenarioBrushes[kind] = bmp, brush
+	return true
+}
+
+func d2dDrawScenarioIcon(kind int, r RECT) {
+	if !ui2d.active || !d2dEnsureScenarioIcon(kind) {
+		return
+	}
+	d2dDrawImageBrushSizedRotated(ui2d.scenarioBrushes[kind], r, 0, 22, 22)
 }
 
 func resampleBGRA(img image.Image, outW, outH int) []byte {

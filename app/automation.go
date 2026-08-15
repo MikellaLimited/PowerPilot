@@ -15,6 +15,8 @@ import (
 )
 
 // AutomationCondition types.
+const condGroup = -1
+
 const (
 	condCPU = iota
 	condGPU
@@ -72,6 +74,52 @@ type AutomationCondition struct {
 	OpenGroups  int     `json:"open_groups,omitempty"`
 	CloseGroups int     `json:"close_groups,omitempty"`
 	DelayAfter  int     `json:"delay_after,omitempty"`
+	GroupID     string  `json:"group_id,omitempty"` // parent compound condition; group blocks use their own ID as the node key
+}
+
+func migrateLegacyConditionGroups(src []AutomationCondition) []AutomationCondition {
+	hasLegacy := false
+	for _, c := range src {
+		if c.OpenGroups > 0 || c.CloseGroups > 0 {
+			hasLegacy = true
+			break
+		}
+	}
+	if !hasLegacy {
+		return src
+	}
+	out := make([]AutomationCondition, 0, len(src)+4)
+	stack := []string{}
+	for _, original := range src {
+		c := original
+		openCount := clampInt(c.OpenGroups, 0, 3)
+		closeCount := clampInt(c.CloseGroups, 0, 3)
+		for i := 0; i < openCount; i++ {
+			parent := ""
+			if len(stack) > 0 {
+				parent = stack[len(stack)-1]
+			}
+			logic := logicAND
+			if i == 0 {
+				logic = c.Logic
+			}
+			id := newAutomationID("group")
+			out = append(out, AutomationCondition{ID: id, Type: condGroup, Logic: logic, Enabled: true, GroupID: parent})
+			stack = append(stack, id)
+		}
+		if len(stack) > 0 {
+			c.GroupID = stack[len(stack)-1]
+		}
+		if openCount > 0 {
+			c.Logic = logicAND
+		}
+		c.OpenGroups, c.CloseGroups = 0, 0
+		out = append(out, c)
+		for i := 0; i < closeCount && len(stack) > 0; i++ {
+			stack = stack[:len(stack)-1]
+		}
+	}
+	return out
 }
 
 type ActionStep struct {
@@ -433,14 +481,26 @@ func evaluateAutomationConditions(conds []AutomationCondition) (bool, string) {
 	if len(enabled) == 0 {
 		return true, ""
 	}
+	leafConditions := make([]AutomationCondition, 0, len(enabled))
 	values := make([]bool, 0, len(enabled))
 	details := make([]string, 0, len(enabled))
+	valuesByID := make(map[string]bool, len(enabled))
+	hasGroups := false
 	for _, c := range enabled {
+		if c.Type == condGroup {
+			hasGroups = true
+			continue
+		}
 		ok, d := evaluateOneCondition(c)
+		leafConditions = append(leafConditions, c)
 		values = append(values, ok)
 		details = append(details, d)
+		valuesByID[c.ID] = ok
 	}
-	result := evalGroupedConditionValues(enabled, values)
+	result := evalGroupedConditionValues(leafConditions, values)
+	if hasGroups {
+		result, _ = evalCompoundConditionValues(enabled, valuesByID, "", map[string]bool{})
+	}
 	if result {
 		return true, ""
 	}
@@ -450,6 +510,34 @@ func evaluateAutomationConditions(conds []AutomationCondition) (bool, string) {
 		}
 	}
 	return false, "условия сценария ещё не выполнены"
+}
+
+func evalCompoundConditionValues(conds []AutomationCondition, values map[string]bool, parentID string, visiting map[string]bool) (bool, bool) {
+	result, found := false, false
+	for _, c := range conds {
+		if !c.Enabled || c.GroupID != parentID {
+			continue
+		}
+		value := false
+		if c.Type == condGroup {
+			if visiting[c.ID] {
+				continue
+			}
+			visiting[c.ID] = true
+			value, _ = evalCompoundConditionValues(conds, values, c.ID, visiting)
+			delete(visiting, c.ID)
+		} else {
+			value = values[c.ID]
+		}
+		if !found {
+			result, found = value, true
+		} else if c.Logic == logicOR {
+			result = result || value
+		} else {
+			result = result && value
+		}
+	}
+	return result, found
 }
 
 func evalGroupedConditionValues(conds []AutomationCondition, values []bool) bool {
