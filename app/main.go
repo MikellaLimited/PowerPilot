@@ -64,6 +64,12 @@ var pausePNGData []byte
 //go:embed assets/play.png
 var playPNGData []byte
 
+//go:embed assets/notification-clear.png
+var notificationClearPNGData []byte
+
+//go:embed assets/notification-read.png
+var notificationReadPNGData []byte
+
 //go:embed assets/caption-close.png
 var captionClosePNGData []byte
 
@@ -656,7 +662,19 @@ type App struct {
 	notificationMarkReadRect               RECT
 	notificationClearRect                  RECT
 	notificationUnreadOnlyRect             RECT
-	notificationRows                       [5]RECT
+	notificationRows                       [6]RECT
+	notificationRowIndices                 [6]int
+	notificationReadRects                  [6]RECT
+	notificationListClip                   RECT
+	notificationScrollTrack                RECT
+	notificationScrollThumb                RECT
+	notificationScrollPx                   float64
+	notificationScrollTarget               float64
+	notificationScrollMax                  float64
+	confirmClearNotifications              bool
+	notificationConfirmRect                RECT
+	notificationConfirmYesRect             RECT
+	notificationConfirmNoRect              RECT
 	notificationPanelOpen                  bool
 	notificationUnreadOnly                 bool
 	notificationBellHover                  bool
@@ -785,7 +803,9 @@ type App struct {
 	historyFilter                          int
 	dataRects                              [6]RECT
 	appUpdateRect                          RECT
+	appUpdateActionRect                    RECT
 	temperatureAutoUpdateRect              RECT
+	temperatureUpdateActionRect            RECT
 	safetyFullscreenRect                   RECT
 	safetyRecentRect                       RECT
 	safetyProcessesRect                    RECT
@@ -1171,7 +1191,7 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		startMetricSampler()
 		if temperatureProviderInstalled() {
 			app.temperatureUpdateLastCheck = time.Now()
-			checkTemperatureProviderUpdatesAsync()
+			checkTemperatureProviderUpdatesAsync(false)
 		}
 		checkPowerPilotUpdatesAsync(false)
 		pSetTimer.Call(hwnd, 1, 250, 0)
@@ -1315,7 +1335,7 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 				temperatureProviderState.RUnlock()
 				if !busy {
 					app.temperatureUpdateLastCheck = time.Now()
-					checkTemperatureProviderUpdatesAsync()
+					checkTemperatureProviderUpdatesAsync(false)
 				}
 			}
 			if app.section == 11 && app.diagnosticMode == 2 && time.Since(app.diagnosticLastRefresh) >= 750*time.Millisecond {
@@ -1364,6 +1384,9 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			app.notificationBellBurstStarted = time.Now()
 		}
 		app.notificationBellLastUnread = unread
+		if app.notificationPanelOpen {
+			layoutControls(hwnd)
+		}
 		invalidate(hwnd)
 		return 0
 	case WM_TRAY:
@@ -1593,11 +1616,15 @@ func layoutControls(hwnd uintptr) {
 	app.notificationBtnRect = RECT{int32(w - 112), int32(navY - 1), int32(w - 70), int32(navY + 41)}
 	for i := range app.notificationRows {
 		app.notificationRows[i] = RECT{}
+		app.notificationRowIndices[i] = -1
+		app.notificationReadRects[i] = RECT{}
 	}
 	app.notificationPanelRect = RECT{}
 	app.notificationMarkReadRect = RECT{}
 	app.notificationClearRect = RECT{}
 	app.notificationUnreadOnlyRect = RECT{}
+	app.notificationListClip = RECT{}
+	app.notificationScrollTrack, app.notificationScrollThumb = RECT{}, RECT{}
 	if app.notificationPanelOpen {
 		panelW := minInt(390, max(320, w-44))
 		panelRight := int(app.settingsBtnRect.Right)
@@ -1614,7 +1641,7 @@ func layoutControls(hwnd uintptr) {
 		app.notificationPanelRect = RECT{int32(panelLeft), int32(panelTop), int32(panelRight), int32(panelTop + panelH)}
 		headerY := panelTop + 48
 		controlX := panelLeft + 16
-		unreadW, controlGap, clearW := 118, 6, 76
+		unreadW, controlGap, clearW := 104, 6, 34
 		markW := max(72, panelRight-panelLeft-32-unreadW-clearW-controlGap*2)
 		app.notificationUnreadOnlyRect = RECT{int32(controlX), int32(headerY), int32(controlX + unreadW), int32(headerY + 30)}
 		controlX += unreadW + controlGap
@@ -1623,12 +1650,31 @@ func layoutControls(hwnd uintptr) {
 		app.notificationClearRect = RECT{int32(controlX), int32(headerY), int32(controlX + clearW), int32(headerY + 30)}
 		listTop := headerY + 40
 		rowH, rowGap := 50, 7
-		for i := range app.notificationRows {
-			y := listTop + i*(rowH+rowGap)
-			if y+rowH > panelTop+panelH-16 {
+		stride := rowH + rowGap
+		listBottom := panelTop + panelH - 16
+		items := notificationItemsSnapshot(app.notificationUnreadOnly)
+		viewH := max(1, listBottom-listTop)
+		contentH := max(0, len(items)*stride-rowGap)
+		app.notificationScrollMax = float64(max(0, contentH-viewH))
+		app.notificationScrollPx = clampFloat(app.notificationScrollPx, 0, app.notificationScrollMax)
+		app.notificationScrollTarget = clampFloat(app.notificationScrollTarget, 0, app.notificationScrollMax)
+		first, rem := int(app.notificationScrollPx)/stride, int(app.notificationScrollPx)%stride
+		rowRight := panelRight - 14
+		if app.notificationScrollMax > 0 {
+			rowRight -= 14
+		}
+		app.notificationListClip = RECT{int32(panelLeft + 14), int32(listTop), int32(rowRight), int32(listBottom)}
+		app.notificationScrollTrack = RECT{int32(panelRight - 10), int32(listTop), int32(panelRight - 5), int32(listBottom)}
+		app.notificationScrollThumb = scrollThumbRectPixels(app.notificationScrollTrack, contentH, viewH, app.notificationScrollPx)
+		for slot := range app.notificationRows {
+			idx := first + slot
+			if idx >= len(items) {
 				break
 			}
-			app.notificationRows[i] = RECT{int32(panelLeft + 14), int32(y), int32(panelRight - 14), int32(y + rowH)}
+			y := listTop - rem + slot*stride
+			app.notificationRowIndices[slot] = idx
+			app.notificationRows[slot] = RECT{int32(panelLeft + 14), int32(y), int32(rowRight), int32(y + rowH)}
+			app.notificationReadRects[slot] = RECT{int32(rowRight - 32), int32(y + 11), int32(rowRight - 6), int32(y + 37)}
 		}
 	}
 
@@ -1735,7 +1781,7 @@ func layoutControls(hwnd uintptr) {
 				x := innerLeft + i*(sectionW+sectionGap)
 				app.settingsSectionRects[i] = RECT{int32(x), int32(headerContentY), int32(x + sectionW), int32(headerContentY + 34)}
 			}
-			headerContentY += 44
+			headerContentY += 56
 		}
 		virtualHeight := settingsVirtualContentHeight()
 		viewportBottom := bodyBottom - 34
@@ -1858,7 +1904,7 @@ func layoutControls(hwnd uintptr) {
 					pShowWindow.Call(app.edits[idHistorySearch], SW_SHOW)
 				}
 				listTop := filterY + 90
-				listBottom := bodyBottom - 48
+				listBottom := bodyBottom - 86
 				rowH, rowGap := 48, 6
 				stride := rowH + rowGap
 				viewH := max(1, listBottom-listTop)
@@ -1891,7 +1937,7 @@ func layoutControls(hwnd uintptr) {
 				app.historyPrevRect, app.historyNextRect = RECT{}, RECT{}
 				app.historyScrollTrack = RECT{int32(innerRight - 10), int32(listTop), int32(innerRight - 4), int32(listBottom)}
 				app.historyScrollThumb = scrollThumbRectPixels(app.historyScrollTrack, contentH, viewH, app.historyScrollPx)
-				app.historyClearRect = RECT{int32(innerLeft), int32(bodyBottom - 38), int32(innerLeft + 120), int32(bodyBottom - 4)}
+				app.historyClearRect = RECT{int32(innerLeft), int32(bodyBottom - 76), int32(innerLeft + 120), int32(bodyBottom - 40)}
 			}
 		case 3:
 			for i := range app.resourceTimelineModeRects {
@@ -1902,9 +1948,12 @@ func layoutControls(hwnd uintptr) {
 				app.dataRects[i] = RECT{}
 			}
 			if app.settingsCategory == 4 {
-				app.dataRects[5] = RECT{int32(innerLeft), int32(contentY + 20), int32(settingsRight), int32(contentY + 88)}
+				app.dataRects[5] = RECT{int32(innerLeft), int32(contentY + 20), int32(settingsRight), int32(contentY + 110)}
 				updateY := int(app.dataRects[5].Bottom) + 14
-				app.appUpdateRect = RECT{int32(innerLeft), int32(updateY), int32(settingsRight), int32(updateY + 68)}
+				app.appUpdateRect = RECT{int32(innerLeft), int32(updateY), int32(settingsRight), int32(updateY + 90)}
+				actionW := minInt(166, max(126, settingsContentW/3))
+				app.temperatureUpdateActionRect = RECT{app.dataRects[5].Right - int32(actionW+12), app.dataRects[5].Top + 25, app.dataRects[5].Right - 12, app.dataRects[5].Bottom - 25}
+				app.appUpdateActionRect = RECT{app.appUpdateRect.Right - int32(actionW+12), app.appUpdateRect.Top + 25, app.appUpdateRect.Right - 12, app.appUpdateRect.Bottom - 25}
 				autoY := int(app.appUpdateRect.Bottom) + 14
 				app.temperatureAutoUpdateRect = RECT{int32(innerLeft), int32(autoY), int32(settingsRight), int32(autoY + 48)}
 			} else {
@@ -1916,7 +1965,7 @@ func layoutControls(hwnd uintptr) {
 					y := contentY + 20 + row*(bh+12)
 					app.dataRects[i] = RECT{int32(x), int32(y), int32(x + bw), int32(y + bh)}
 				}
-				app.appUpdateRect, app.temperatureAutoUpdateRect = RECT{}, RECT{}
+				app.appUpdateRect, app.appUpdateActionRect, app.temperatureAutoUpdateRect, app.temperatureUpdateActionRect = RECT{}, RECT{}, RECT{}, RECT{}
 			}
 		case 5:
 			row0 := uiSettingsRowTop(contentY, 0)
@@ -1943,7 +1992,8 @@ func layoutControls(hwnd uintptr) {
 			move(app.edits[idSoundVolume], int(app.volumeValueRect.Left)+4, int(app.volumeValueRect.Top)+5, valueW-28, 18)
 			pShowWindow.Call(app.edits[idSoundVolume], SW_SHOW)
 		case 7:
-			row0 := contentY + 12
+			// Keep the sticky sub-navigation clear of the first section title.
+			row0 := contentY + 34
 			app.miniAlwaysTopRect = RECT{int32(innerLeft), int32(row0), int32(innerLeft + 28), int32(row0 + 28)}
 			miniY := row0 + 72
 			miniGap := 8
@@ -2669,7 +2719,7 @@ func layoutControls(hwnd uintptr) {
 	// Direct2D transitions. Modal sheets are custom Direct2D content, so child EDIT windows
 	// must be explicitly hidden while a modal is on top (Win32 children otherwise punch
 	// through the painted overlay due to their separate HWND z-order).
-	if modalOverlayActive() {
+	if modalOverlayActive() || app.notificationPanelOpen {
 		hideNativeInputs()
 	}
 }
@@ -2693,7 +2743,7 @@ func settingsVirtualContentHeight() int {
 		return 370
 	case 4:
 		if app.settingsCategory == 4 {
-			return 370
+			return 430
 		}
 		return 275
 	case 5:
@@ -2701,13 +2751,13 @@ func settingsVirtualContentHeight() int {
 	case 6:
 		return 150
 	case 7:
-		return 510
+		return 540
 	}
 	return 0
 }
 
 func modalOverlayActive() bool {
-	return app.confirmSystemMode != 0 || app.confirmClearHistory || app.confirmDeleteIdx >= 0
+	return app.confirmSystemMode != 0 || app.confirmClearHistory || app.confirmClearNotifications || app.confirmDeleteIdx >= 0
 }
 
 func hideNativeInputs() {
@@ -4014,26 +4064,37 @@ func drawSettingsActionCard(hdc uintptr, r RECT, title, sub string) {
 	drawText(hdc, sub, int(r.Left)+14, int(r.Top)+28, int(r.Right-r.Left)-28, int(r.Bottom-r.Top)-34, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK|DT_END_ELLIPSIS)
 }
 
+func drawSettingsUpdateCard(hdc uintptr, r, action RECT, title, sub, actionLabel string, busy bool) {
+	if r.Right <= r.Left {
+		return
+	}
+	roundFill(hdc, r, surfaceButtonColor(), 12)
+	if ui2d.active {
+		d2dDrawRoundedOutline(r, 12, 1, blendColor(theme.border, theme.accent2, .22))
+	}
+	textRight := int(action.Left) - 12
+	textW := max(90, textRight-int(r.Left)-14)
+	drawText(hdc, title, int(r.Left)+14, int(r.Top)+10, textW, 21, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	drawText(hdc, sub, int(r.Left)+14, int(r.Top)+34, textW, int(r.Bottom-r.Top)-42, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK|DT_END_ELLIPSIS)
+	if busy {
+		drawDisabledButton(hdc, action, actionLabel)
+	} else {
+		drawButton(hdc, action, actionLabel, false)
+	}
+}
+
 func drawComponentsSettings(hdc uintptr, body RECT) {
-	installed := temperatureProviderInstalled()
-	installing, providerStatus := temperatureProviderStatus()
-	sensorTitle := "Установить аппаратные датчики"
-	if installed {
-		sensorTitle = "Аппаратные датчики"
-	}
-	if temperatureProviderUpdateAvailable() {
-		sensorTitle = "Обновить аппаратные датчики"
-	}
-	if installing {
-		sensorTitle = "Установка датчиков…"
-	}
-	drawSettingsActionCard(hdc, app.dataRects[5], sensorTitle, providerStatus)
+	_, providerStatus := temperatureProviderStatus()
+	sensorAction, sensorBusy := temperatureProviderActionLabel()
+	drawSettingsUpdateCard(hdc, app.dataRects[5], app.temperatureUpdateActionRect, "Аппаратные датчики", providerStatus, sensorAction, sensorBusy)
 	title, sub := powerPilotUpdateCard()
-	drawSettingsActionCard(hdc, app.appUpdateRect, title, sub)
-	drawText(hdc, "Проверка обновлений датчиков", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)-1, int(body.Right)-int(app.temperatureAutoUpdateRect.Left)-18, 19, 11, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	drawText(hdc, "Автоматически при каждом запуске PowerPilot и затем каждые 3 часа. Установка найденного обновления запускается вручную и может запросить UAC.", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)+18, int(body.Right)-int(app.temperatureAutoUpdateRect.Left)-18, 34, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
+	updateAction, updateBusy := powerPilotUpdateActionLabel()
+	drawSettingsUpdateCard(hdc, app.appUpdateRect, app.appUpdateActionRect, title, sub, updateAction, updateBusy)
+	textW := int(app.temperatureAutoUpdateRect.Right - app.temperatureAutoUpdateRect.Left)
+	drawText(hdc, "Проверка обновлений датчиков", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)-1, textW, 19, 11, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	drawText(hdc, "Автоматически при каждом запуске PowerPilot и затем каждые 3 часа. Установка найденного обновления запускается вручную и может запросить UAC.", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)+18, textW, 34, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
 	infoY := int(app.temperatureAutoUpdateRect.Bottom) + 36
-	drawText(hdc, "Аппаратные показатели в «Ресурсы → Продвинутый монитор → Датчики» появляются после установки провайдера. Температуры также используются в обычных карточках ресурсов; для низкоуровневого доступа CPU и платы применяется PawnIO.", int(body.Left)+18, infoY, int(body.Right-body.Left)-36, 38, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
+	drawText(hdc, "Аппаратные показатели в «Ресурсы → Продвинутый монитор → Датчики» появляются после установки провайдера. Температуры также используются в обычных карточках ресурсов; для низкоуровневого доступа CPU и платы применяется PawnIO.", int(app.temperatureAutoUpdateRect.Left), infoY, textW, 38, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
 }
 
 func drawSafetySettings(hdc uintptr, body RECT) {
@@ -4522,7 +4583,6 @@ func drawScenarioPage(hdc uintptr, body RECT, w int) {
 			if app.draggingScenarioKind == 1 && app.draggingScenarioParentID == "" {
 				x := app.scenarioListClip.Left + 3
 				d2dDrawLine(float32(x), float32(app.scenarioListClip.Top+4), float32(x), float32(app.scenarioListClip.Bottom-4), 2, theme.accent2)
-				drawText(hdc, "Без группы", int(x)+7, int(app.scenarioListClip.Top)+2, 94, 18, 9, 650, theme.accent2, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 			}
 			hh := (base.Bottom - base.Top) / 2
 			cy := app.draggingScenarioY
@@ -4740,6 +4800,19 @@ func drawScenarioIconButton(hdc uintptr, r RECT, kind int) {
 }
 
 func scenarioTooltipAt(x, y int32) (RECT, string) {
+	if app.notificationPanelOpen && !app.confirmClearNotifications {
+		if pointIn(app.notificationClearRect, x, y) {
+			return app.notificationClearRect, "Очистить уведомления"
+		}
+		items := notificationItemsSnapshot(app.notificationUnreadOnly)
+		for slot, r := range app.notificationReadRects {
+			idx := app.notificationRowIndices[slot]
+			if idx >= 0 && idx < len(items) && items[idx].Unread && pointIn(r, x, y) {
+				return r, "Пометить прочитанным"
+			}
+		}
+		return RECT{}, ""
+	}
 	if app.section != 7 && app.section != 13 {
 		return RECT{}, ""
 	}
@@ -5628,11 +5701,10 @@ func queueSmoothScroll(wheelDelta int16) {
 	if wheelDelta == 0 {
 		return
 	}
-	if app.notificationPanelOpen && pointIn(app.notificationPanelRect, app.mouseX, app.mouseY) {
-		return
-	}
 	step := 60.0 * float64(wheelDelta) / 120.0
 	switch {
+	case app.notificationPanelOpen && pointIn(app.notificationPanelRect, app.mouseX, app.mouseY):
+		app.notificationScrollTarget = clampFloat(app.notificationScrollTarget-step, 0, app.notificationScrollMax)
 	case app.section == 3 && app.settingsSubpage != 2:
 		app.settingsScrollTarget = clampFloat(app.settingsScrollTarget-step, 0, app.settingsScrollMax)
 	case app.section == 3 && app.settingsSubpage == 2 && app.historyDetailOpen:
@@ -5678,6 +5750,8 @@ func scrollMaxPx(kind int) float64 {
 		total, stride, clip = advancedResourceItemCount(), 43, app.resourceProcListClip
 	case 7:
 		return app.settingsScrollMax
+	case 8:
+		return app.notificationScrollMax
 	default:
 		return 0
 	}
@@ -5709,6 +5783,8 @@ func beginScrollbarInteraction(x, y int32) bool {
 	kind := 0
 	track, thumb := RECT{}, RECT{}
 	switch {
+	case app.notificationPanelOpen && app.notificationScrollMax > 0:
+		kind, track, thumb = 8, app.notificationScrollTrack, app.notificationScrollThumb
 	case app.section == 3 && app.settingsSubpage != 2 && app.settingsScrollMax > 0:
 		kind, track, thumb = 7, app.settingsScrollTrack, app.settingsScrollThumb
 	case app.section == 3 && app.settingsSubpage == 2 && app.historyDetailOpen:
@@ -5755,6 +5831,8 @@ func setScrollTargetFromY(kind int, y, grabOffset float64) {
 		track, thumb = app.resourceProcScrollTrack, app.resourceProcScrollThumb
 	case 7:
 		track, thumb = app.settingsScrollTrack, app.settingsScrollThumb
+	case 8:
+		track, thumb = app.notificationScrollTrack, app.notificationScrollThumb
 	default:
 		return
 	}
@@ -5780,6 +5858,8 @@ func setScrollTargetFromY(kind int, y, grabOffset float64) {
 		app.resourceProcScrollTarget = target
 	case 7:
 		app.settingsScrollTarget = target
+	case 8:
+		app.notificationScrollTarget = target
 	}
 }
 
@@ -5803,12 +5883,18 @@ func dragScrollbarTo(y int32) {
 		app.resourceProcScrollPx = app.resourceProcScrollTarget
 	case 7:
 		app.settingsScrollPx = app.settingsScrollTarget
+	case 8:
+		app.notificationScrollPx = app.notificationScrollTarget
 	}
 	updateScrollGeometry()
 	invalidate(app.hwnd)
 }
 
 func updateScrollGeometry() {
+	if app.notificationPanelOpen {
+		layoutControls(app.hwnd)
+		return
+	}
 	if app.section == 7 || app.section == 13 || (app.section == 3 && app.settingsSubpage != 2) {
 		layoutControls(app.hwnd)
 		return
@@ -6357,6 +6443,13 @@ func animate() {
 		}
 		scrolled := false
 		switch {
+		case app.notificationPanelOpen:
+			old := app.notificationScrollPx
+			app.notificationScrollPx += (app.notificationScrollTarget - app.notificationScrollPx) * scrollStep
+			if abs(app.notificationScrollPx-app.notificationScrollTarget) < .08 {
+				app.notificationScrollPx = app.notificationScrollTarget
+			}
+			scrolled = old != app.notificationScrollPx
 		case app.section == 3 && app.settingsSubpage != 2:
 			old := app.settingsScrollPx
 			app.settingsScrollPx += (app.settingsScrollTarget - app.settingsScrollPx) * scrollStep
@@ -7670,6 +7763,19 @@ func onClick(x, y int32) {
 			}
 		case 3:
 		case 4:
+			if app.settingsCategory == 4 {
+				if pointIn(app.temperatureUpdateActionRect, x, y) {
+					playUI(clickSound)
+					handleTemperatureProviderUpdateAction()
+					return
+				}
+				if pointIn(app.appUpdateActionRect, x, y) {
+					playUI(clickSound)
+					handlePowerPilotUpdateAction()
+					return
+				}
+				return
+			}
 			for i, r := range app.dataRects {
 				if pointIn(r, x, y) {
 					playUI(clickSound)
@@ -7684,16 +7790,9 @@ func onClick(x, y int32) {
 						restoreBackup()
 					case 4:
 						_ = exec.Command("notepad.exe", technicalLogPath()).Start()
-					case 5:
-						installTemperatureProviderAsync()
 					}
 					return
 				}
-			}
-			if app.settingsCategory == 4 && pointIn(app.appUpdateRect, x, y) {
-				playUI(clickSound)
-				handlePowerPilotUpdateAction()
-				return
 			}
 		case 5:
 			if pointIn(app.safetyFullscreenRect, x, y) {

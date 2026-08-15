@@ -286,7 +286,9 @@ func checkPowerPilotUpdatesAsync(manual bool) {
 		powerPilotUpdateState.AssetDigest = asset.Digest
 		powerPilotUpdateState.AssetSize = asset.Size
 		powerPilotUpdateState.Unlock()
-		pushAppNotificationUnique("powerpilot-update:"+latest, notifUpdate, "Доступно обновление PowerPilot", "Версия "+latest+" готова к установке.", notifTargetData)
+		if !manual {
+			pushAppNotificationUnique("powerpilot-update:"+latest, notifUpdate, "Доступно обновление PowerPilot", "Версия "+latest+" готова к установке.", notifTargetData)
+		}
 		invalidate(app.hwnd)
 	}()
 }
@@ -315,21 +317,36 @@ func powerPilotUpdateCard() (string, string) {
 				pct = 100
 			}
 		}
-		return "Скачивание PowerPilot " + powerPilotUpdateState.LatestVersion, "Загружено " + strconv.Itoa(pct) + "% · после проверки PowerPilot перезапустится автоматически"
+		return "Обновления PowerPilot", "Версия " + powerPilotUpdateState.LatestVersion + " · загружено " + strconv.Itoa(pct) + "% · после проверки приложение перезапустится"
 	}
 	if powerPilotUpdateState.Checking {
-		return "Проверка обновления PowerPilot…", "GitHub Releases · " + powerPilotUpdateRepo
+		return "Обновления PowerPilot", "Проверяется последняя версия через GitHub Releases · " + powerPilotUpdateRepo
 	}
 	if powerPilotUpdateState.Available {
-		return "Доступен PowerPilot " + powerPilotUpdateState.LatestVersion, "Нажмите «Обновить», чтобы скачать пакет и автоматически перезапустить PowerPilot"
+		return "Обновления PowerPilot", "Доступна версия " + powerPilotUpdateState.LatestVersion + " · установлена " + currentPowerPilotVersion()
 	}
 	if powerPilotUpdateState.LastError != "" {
 		return "Обновления PowerPilot", "Не удалось проверить: " + powerPilotUpdateState.LastError
 	}
 	if !powerPilotUpdateState.LastCheck.IsZero() {
-		return "PowerPilot обновлён", "Установлена последняя версия " + currentPowerPilotVersion() + " · проверено " + powerPilotUpdateState.LastCheck.Format("15:04")
+		return "Обновления PowerPilot", "Установлена последняя версия " + currentPowerPilotVersion() + " · проверено " + powerPilotUpdateState.LastCheck.Format("15:04")
 	}
 	return "Обновления PowerPilot", "Автопроверка при запуске и каждые 6 часов через GitHub Releases"
+}
+
+func powerPilotUpdateActionLabel() (string, bool) {
+	powerPilotUpdateState.RLock()
+	defer powerPilotUpdateState.RUnlock()
+	if powerPilotUpdateState.Downloading {
+		return "Установка…", true
+	}
+	if powerPilotUpdateState.Checking {
+		return "Проверка…", true
+	}
+	if powerPilotUpdateState.Available {
+		return "Установить", false
+	}
+	return "Проверить обновление", false
 }
 
 func handlePowerPilotUpdateAction() {
@@ -370,7 +387,6 @@ func downloadAndApplyPowerPilotUpdateAsync() {
 			powerPilotUpdateState.Downloading = false
 			powerPilotUpdateState.LastError = err.Error()
 			powerPilotUpdateState.Unlock()
-			pushAppNotification(notifError, "Не удалось обновить PowerPilot", err.Error(), notifTargetData)
 			techLog040("PowerPilot update failed: " + err.Error())
 			invalidate(app.hwnd)
 		}
@@ -504,7 +520,6 @@ func downloadAndApplyPowerPilotUpdateAsync() {
 		powerPilotUpdateState.Downloading = false
 		powerPilotUpdateState.PackagePath = finalPath
 		powerPilotUpdateState.Unlock()
-		pushAppNotification(notifSuccess, "PowerPilot готов к обновлению", "Версия "+latest+" проверена. Перезапускаю приложение…", notifTargetData)
 		invalidate(app.hwnd)
 		time.Sleep(220 * time.Millisecond)
 		app.exiting = true
