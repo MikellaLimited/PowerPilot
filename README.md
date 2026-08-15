@@ -19,6 +19,8 @@ Stable releases use tags in the form `vX.Y.Z`. PowerPilot checks the latest GitH
 
 See [GITHUB_UPDATES.md](GITHUB_UPDATES.md) for the update/release contract.
 
+Testers can use the rolling `PowerPilot_Develop_Setup.exe` prerelease. That build follows the `develop` branch through a separate update channel and does not affect stable clients.
+
 ## Development
 
 PowerPilot is primarily written in Go and uses native Win32 + Direct2D/DirectWrite for the desktop UI.

@@ -23,6 +23,9 @@ var payload embed.FS
 //go:embed assets/PowerPilot.ico
 var iconData []byte
 
+// Overridden by the release builder for rolling develop installers.
+var installerVersion = "0.8.2"
+
 var (
 	user32   = syscall.NewLazyDLL("user32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
@@ -371,7 +374,7 @@ func drawWizard(hdc uintptr, rc RECT) {
 
 func drawWelcome(hdc uintptr, w, h int) {
 	drawText(hdc, "Вас приветствует мастер установки PowerPilot", 242, 52, w-280, 64, 24, 700, rgb(20, 20, 20), DT_LEFT|DT_WORDBREAK)
-	drawText(hdc, "Эта программа установит PowerPilot 0.8.0 на ваш компьютер.", 242, 142, w-292, 48, 14, 400, rgb(55, 55, 55), DT_LEFT|DT_WORDBREAK)
+	drawText(hdc, "Эта программа установит PowerPilot "+installerVersion+" на ваш компьютер.", 242, 142, w-292, 48, 14, 400, rgb(55, 55, 55), DT_LEFT|DT_WORDBREAK)
 	msg := "Существующая установка не найдена. Будет выполнена новая установка."
 	if app.detectedPath != "" {
 		msg = "Найдена существующая установка PowerPilot. Мастер предложит обновить её в той же папке."
@@ -428,7 +431,7 @@ func drawInstalling(hdc uintptr, w, h int) {
 }
 func drawFinish(hdc uintptr, w, h int) {
 	drawText(hdc, "Установка PowerPilot завершена", 242, 52, w-280, 56, 23, 700, rgb(20, 20, 20), DT_LEFT|DT_WORDBREAK)
-	drawText(hdc, "PowerPilot 0.8.0 установлен и готов к работе.", 242, 142, w-292, 42, 14, 400, rgb(55, 55, 55), DT_LEFT|DT_WORDBREAK)
+	drawText(hdc, "PowerPilot "+installerVersion+" установлен и готов к работе.", 242, 142, w-292, 42, 14, 400, rgb(55, 55, 55), DT_LEFT|DT_WORDBREAK)
 	drawCheck(hdc, app.launchRect, app.launch)
 	drawText(hdc, "Запустить PowerPilot сейчас", 278, 236, w-330, 26, 14, 400, rgb(35, 35, 35), DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	drawText(hdc, "Нажмите «Готово», чтобы закрыть мастер.", 242, h-132, w-292, 28, 13, 500, rgb(40, 40, 40), DT_LEFT|DT_VCENTER|DT_SINGLELINE)
@@ -610,7 +613,7 @@ func createShortcut(path, target, icon string) error {
 }
 func registerUninstall(dir, exe, uninst string) {
 	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\PowerPilot`
-	vals := [][]string{{"DisplayName", "PowerPilot"}, {"DisplayVersion", "0.8.1"}, {"Publisher", "PowerPilot Project"}, {"InstallLocation", dir}, {"DisplayIcon", exe}, {"UninstallString", `"` + uninst + `"`}, {"NoModify", "1"}, {"NoRepair", "1"}}
+	vals := [][]string{{"DisplayName", "PowerPilot"}, {"DisplayVersion", installerVersion}, {"Publisher", "PowerPilot Project"}, {"InstallLocation", dir}, {"DisplayIcon", exe}, {"UninstallString", `"` + uninst + `"`}, {"NoModify", "1"}, {"NoRepair", "1"}}
 	for _, v := range vals {
 		typ := "REG_SZ"
 		if v[0] == "NoModify" || v[0] == "NoRepair" {

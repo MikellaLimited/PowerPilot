@@ -366,7 +366,7 @@ func fetchLatestTemperatureProvider(ctx context.Context) (string, string, error)
 	return fetchLatestTemperatureProviderNative(ctx)
 }
 
-func checkTemperatureProviderUpdatesAsync() {
+func checkTemperatureProviderUpdatesAsync(manual bool) {
 	temperatureProviderState.Lock()
 	if temperatureProviderState.Checking || temperatureProviderState.Installing {
 		temperatureProviderState.Unlock()
@@ -397,7 +397,7 @@ func checkTemperatureProviderUpdatesAsync() {
 			}
 		}
 		temperatureProviderState.Unlock()
-		if notifyUpdate {
+		if notifyUpdate && !manual {
 			pushAppNotificationUnique(notifyKey, notifUpdate, "Обновление аппаратных датчиков", "Доступна новая версия провайдера датчиков: "+tag, notifTargetSensors)
 		}
 		if app.hwnd != 0 {
@@ -468,6 +468,42 @@ func temperatureProviderStatus() (bool, string) {
 		return false, fmt.Sprintf("Установлен %s · PawnIO %s · расширенный доступ активен", v, pawnIOVersion)
 	}
 	return false, "Не установлены — аппаратные датчики скрыты"
+}
+
+func temperatureProviderActionLabel() (string, bool) {
+	temperatureProviderState.RLock()
+	installing := temperatureProviderState.Installing
+	checking := temperatureProviderState.Checking
+	update := temperatureProviderState.UpdateAvailable
+	temperatureProviderState.RUnlock()
+	if installing {
+		return "Установка…", true
+	}
+	if checking {
+		return "Проверка…", true
+	}
+	if !temperatureProviderInstalled() {
+		return "Установить", false
+	}
+	if update || temperatureProviderNeedsRepair() {
+		return "Обновить", false
+	}
+	return "Проверить обновление", false
+}
+
+func handleTemperatureProviderUpdateAction() {
+	temperatureProviderState.RLock()
+	busy := temperatureProviderState.Installing || temperatureProviderState.Checking
+	update := temperatureProviderState.UpdateAvailable
+	temperatureProviderState.RUnlock()
+	if busy {
+		return
+	}
+	if !temperatureProviderInstalled() || update || temperatureProviderNeedsRepair() {
+		installTemperatureProviderAsync()
+		return
+	}
+	checkTemperatureProviderUpdatesAsync(true)
 }
 
 // installTemperatureProviderAsync installs/updates the private hardware sensor provider.
@@ -713,11 +749,6 @@ func installTemperatureProviderAsync() {
 			temperatureCollectorControl.Unlock()
 		}
 		temperatureProviderState.Unlock()
-		if err != nil {
-			pushAppNotification(notifError, "Не удалось обновить датчики", err.Error(), notifTargetSensors)
-		} else {
-			pushAppNotification(notifSuccess, "Датчики обновлены", "Аппаратный провайдер успешно обновлён и перезапущен.", notifTargetSensors)
-		}
 		if err == nil {
 			time.Sleep(1200 * time.Millisecond)
 			sampleTemperatures()

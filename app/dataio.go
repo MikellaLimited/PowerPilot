@@ -158,7 +158,7 @@ func exportTasks() {
 	for i := range tasks {
 		tasks[i].LastRunKey = "" // Runtime scheduling state is local to this PC.
 	}
-	doc := taskExportFile{FormatVersion: 1, AppVersion: appVersion, ExportedAt: time.Now().Format(time.RFC3339), Tasks: tasks}
+	doc := taskExportFile{FormatVersion: 1, AppVersion: currentPowerPilotVersion(), ExportedAt: time.Now().Format(time.RFC3339), Tasks: tasks}
 	b, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil || os.WriteFile(p, b, 0644) != nil {
 		appendHistory("ERROR", "Ошибка экспорта задач")

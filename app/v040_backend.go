@@ -405,6 +405,23 @@ type ScenarioClipboard040 struct {
 
 var scenarioClipboard040 ScenarioClipboard040
 
+func remapConditionTreeIDs(src []AutomationCondition) []AutomationCondition {
+	out := append([]AutomationCondition(nil), src...)
+	ids := make(map[string]string, len(out))
+	for _, c := range out {
+		ids[c.ID] = newAutomationID("cond")
+	}
+	for i := range out {
+		out[i].ID = ids[out[i].ID]
+		if parent, ok := ids[out[i].GroupID]; ok {
+			out[i].GroupID = parent
+		} else {
+			out[i].GroupID = ""
+		}
+	}
+	return out
+}
+
 func copyScenarioBlock040(kind, idx int) bool {
 	switch kind {
 	case 1:
@@ -414,6 +431,7 @@ func copyScenarioBlock040(kind, idx int) bool {
 		}
 		c := v[idx]
 		c.ID = newAutomationID("cond")
+		c.GroupID = ""
 		scenarioClipboard040 = ScenarioClipboard040{Kind: 1, Condition: c}
 	case 2:
 		v := currentScenarioSteps()
@@ -437,10 +455,7 @@ func copyScenarioGroup040(kind int) bool {
 		if len(v) == 0 {
 			return false
 		}
-		cpy := append([]AutomationCondition(nil), v...)
-		for i := range cpy {
-			cpy[i].ID = newAutomationID("cond")
-		}
+		cpy := remapConditionTreeIDs(v)
 		scenarioClipboard040 = ScenarioClipboard040{Kind: 3, Conditions: cpy}
 	case 2:
 		v := currentScenarioSteps()
@@ -481,9 +496,7 @@ func pasteScenarioBlock040(kind, at int) bool {
 		if len(v)+len(incoming) > 32 {
 			return false
 		}
-		for i := range incoming {
-			incoming[i].ID = newAutomationID("cond")
-		}
+		incoming = remapConditionTreeIDs(incoming)
 		at = clampInt(at, 0, len(v))
 		out := make([]AutomationCondition, 0, len(v)+len(incoming))
 		out = append(out, v[:at]...)
@@ -605,7 +618,7 @@ func validateTask040(t TaskState) []ValidationIssue040 {
 	var out []ValidationIssue040
 	addE := func(s string) { out = append(out, ValidationIssue040{2, s}) }
 	addW := func(s string) { out = append(out, ValidationIssue040{1, s}) }
-	if t.Action < 0 || t.Action > 3 {
+	if t.Action < 0 || t.Action > 4 {
 		addE("Не выбрано финальное действие")
 	}
 	switch t.Mode {

@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,12 +18,21 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+	"unsafe"
 )
 
 const (
 	powerPilotUpdateRepo     = "MikellaLimited/PowerPilot"
-	powerPilotUpdateInterval = 6 * time.Hour
+	powerPilotUpdateInterval = 30 * time.Minute
+)
+
+// These variables are overridden with -ldflags for rolling develop builds.
+// Stable builds keep the source defaults and continue to use /releases/latest.
+var (
+	powerPilotBuildVersion  = appVersion
+	powerPilotUpdateChannel = "stable"
 )
 
 type powerPilotReleaseAsset struct {
@@ -63,6 +73,47 @@ var powerPilotUpdateState powerPilotUpdateStateData
 
 func normalizeReleaseVersion(v string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(v), "v"), "V")
+}
+
+func currentPowerPilotVersion() string {
+	v := strings.TrimSpace(powerPilotBuildVersion)
+	if v == "" {
+		return appVersion
+	}
+	return v
+}
+
+func isDevelopUpdateChannel() bool {
+	return strings.EqualFold(strings.TrimSpace(powerPilotUpdateChannel), "develop")
+}
+
+func powerPilotReleaseAPIURL() string {
+	base := "https://api.github.com/repos/" + powerPilotUpdateRepo + "/releases/"
+	if isDevelopUpdateChannel() {
+		return base + "tags/develop"
+	}
+	return base + "latest"
+}
+
+func powerPilotReleaseVersion(rel powerPilotRelease) (string, error) {
+	if !isDevelopUpdateChannel() {
+		v := normalizeReleaseVersion(rel.TagName)
+		if v == "" {
+			return "", fmt.Errorf("GitHub Release не содержит версии")
+		}
+		return v, nil
+	}
+	const marker = "powerpilot-develop-version:"
+	for _, line := range strings.Split(rel.Body, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(strings.ToLower(line), marker) {
+			v := normalizeReleaseVersion(strings.TrimSpace(line[len(marker):]))
+			if v != "" {
+				return v, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("develop-релиз не содержит маркер версии")
 }
 
 func versionParts(v string) []int {
@@ -111,13 +162,13 @@ func compareVersions(a, b string) int {
 
 func fetchLatestPowerPilotRelease(ctx context.Context) (powerPilotRelease, error) {
 	var rel powerPilotRelease
-	url := "https://api.github.com/repos/" + powerPilotUpdateRepo + "/releases/latest"
+	url := powerPilotReleaseAPIURL()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return rel, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "PowerPilot/"+appVersion)
+	req.Header.Set("User-Agent", "PowerPilot/"+currentPowerPilotVersion())
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
 		return rel, err
@@ -139,6 +190,14 @@ func fetchLatestPowerPilotRelease(ctx context.Context) (powerPilotRelease, error
 }
 
 func selectPowerPilotUpdateAsset(rel powerPilotRelease) (powerPilotReleaseAsset, error) {
+	if isDevelopUpdateChannel() {
+		for _, a := range rel.Assets {
+			if strings.EqualFold(a.Name, "PowerPilot_Develop_Update.zip") {
+				return a, nil
+			}
+		}
+		return powerPilotReleaseAsset{}, fmt.Errorf("в develop-релизе не найден PowerPilot_Develop_Update.zip")
+	}
 	ver := strings.ToLower(normalizeReleaseVersion(rel.TagName))
 	var fallback *powerPilotReleaseAsset
 	for i := range rel.Assets {
@@ -190,13 +249,20 @@ func checkPowerPilotUpdatesAsync(manual bool) {
 			invalidate(app.hwnd)
 			return
 		}
-		latest := normalizeReleaseVersion(rel.TagName)
+		latest, verr := powerPilotReleaseVersion(rel)
+		if verr != nil {
+			powerPilotUpdateState.LastError = verr.Error()
+			powerPilotUpdateState.Available = false
+			powerPilotUpdateState.Unlock()
+			invalidate(app.hwnd)
+			return
+		}
 		powerPilotUpdateState.LatestVersion = latest
 		powerPilotUpdateState.ReleaseName = rel.Name
 		powerPilotUpdateState.ReleaseNotes = rel.Body
 		powerPilotUpdateState.ReleaseURL = rel.HTMLURL
 		powerPilotUpdateState.LastError = ""
-		if compareVersions(appVersion, latest) >= 0 {
+		if compareVersions(currentPowerPilotVersion(), latest) >= 0 {
 			powerPilotUpdateState.Available = false
 			powerPilotUpdateState.AssetURL = ""
 			powerPilotUpdateState.AssetName = ""
@@ -220,7 +286,9 @@ func checkPowerPilotUpdatesAsync(manual bool) {
 		powerPilotUpdateState.AssetDigest = asset.Digest
 		powerPilotUpdateState.AssetSize = asset.Size
 		powerPilotUpdateState.Unlock()
-		pushAppNotificationUnique("powerpilot-update:"+latest, notifUpdate, "Доступно обновление PowerPilot", "Версия "+latest+" готова к установке.", notifTargetData)
+		if !manual {
+			pushAppNotificationUnique("powerpilot-update:"+latest, notifUpdate, "Доступно обновление PowerPilot", "Версия "+latest+" готова к установке.", notifTargetData)
+		}
 		invalidate(app.hwnd)
 	}()
 }
@@ -249,21 +317,36 @@ func powerPilotUpdateCard() (string, string) {
 				pct = 100
 			}
 		}
-		return "Скачивание PowerPilot " + powerPilotUpdateState.LatestVersion, "Загружено " + strconv.Itoa(pct) + "% · после проверки PowerPilot перезапустится автоматически"
+		return "Обновления PowerPilot", "Версия " + powerPilotUpdateState.LatestVersion + " · загружено " + strconv.Itoa(pct) + "% · после проверки приложение перезапустится"
 	}
 	if powerPilotUpdateState.Checking {
-		return "Проверка обновления PowerPilot…", "GitHub Releases · " + powerPilotUpdateRepo
+		return "Обновления PowerPilot", "Проверяется последняя версия через GitHub Releases · " + powerPilotUpdateRepo
 	}
 	if powerPilotUpdateState.Available {
-		return "Доступен PowerPilot " + powerPilotUpdateState.LatestVersion, "Нажмите «Обновить», чтобы скачать пакет и автоматически перезапустить PowerPilot"
+		return "Обновления PowerPilot", "Доступна версия " + powerPilotUpdateState.LatestVersion + " · установлена " + currentPowerPilotVersion()
 	}
 	if powerPilotUpdateState.LastError != "" {
 		return "Обновления PowerPilot", "Не удалось проверить: " + powerPilotUpdateState.LastError
 	}
 	if !powerPilotUpdateState.LastCheck.IsZero() {
-		return "PowerPilot обновлён", "Установлена последняя версия " + appVersion + " · проверено " + powerPilotUpdateState.LastCheck.Format("15:04")
+		return "Обновления PowerPilot", "Установлена последняя версия " + currentPowerPilotVersion() + " · проверено " + powerPilotUpdateState.LastCheck.Format("15:04")
 	}
-	return "Обновления PowerPilot", "Автопроверка при запуске и каждые 6 часов через GitHub Releases"
+	return "Обновления PowerPilot", "Автопроверка при запуске и каждые 30 минут через GitHub Releases"
+}
+
+func powerPilotUpdateActionLabel() (string, bool) {
+	powerPilotUpdateState.RLock()
+	defer powerPilotUpdateState.RUnlock()
+	if powerPilotUpdateState.Downloading {
+		return "Установка…", true
+	}
+	if powerPilotUpdateState.Checking {
+		return "Проверка…", true
+	}
+	if powerPilotUpdateState.Available {
+		return "Установить", false
+	}
+	return "Проверить обновление", false
 }
 
 func handlePowerPilotUpdateAction() {
@@ -304,7 +387,7 @@ func downloadAndApplyPowerPilotUpdateAsync() {
 			powerPilotUpdateState.Downloading = false
 			powerPilotUpdateState.LastError = err.Error()
 			powerPilotUpdateState.Unlock()
-			pushAppNotification(notifError, "Не удалось обновить PowerPilot", err.Error(), notifTargetData)
+			techLog040("PowerPilot update failed: " + err.Error())
 			invalidate(app.hwnd)
 		}
 
@@ -315,7 +398,7 @@ func downloadAndApplyPowerPilotUpdateAsync() {
 			fail(err)
 			return
 		}
-		req.Header.Set("User-Agent", "PowerPilot/"+appVersion)
+		req.Header.Set("User-Agent", "PowerPilot/"+currentPowerPilotVersion())
 		resp, err := (&http.Client{Timeout: 10 * time.Minute}).Do(req)
 		if err != nil {
 			fail(err)
@@ -411,28 +494,58 @@ func downloadAndApplyPowerPilotUpdateAsync() {
 			return
 		}
 		appPath, _ = filepath.Abs(appPath)
-		cmd := exec.Command(updaterPath,
+		args := []string{
 			"--package", finalPath,
 			"--app", appPath,
 			"--pid", strconv.Itoa(os.Getpid()),
 			"--version", latest,
-			"--old-version", appVersion,
-		)
+			"--old-version", currentPowerPilotVersion(),
+		}
+		cmd := exec.Command(updaterPath, args...)
 		cmd.Dir = dir
 		if err := cmd.Start(); err != nil {
-			fail(fmt.Errorf("не удалось запустить модуль обновления: %v", err))
-			return
+			if !errors.Is(err, syscall.Errno(740)) {
+				fail(fmt.Errorf("не удалось запустить модуль обновления: %v", err))
+				return
+			}
+			if err := launchUpdaterElevated(updaterPath, dir, args); err != nil {
+				fail(fmt.Errorf("не удалось запустить модуль обновления через UAC: %v", err))
+				return
+			}
+			techLog040("PowerPilot updater requested elevation and was launched through UAC")
+		} else {
+			techLog040("PowerPilot updater launched without elevation")
 		}
 		powerPilotUpdateState.Lock()
 		powerPilotUpdateState.Downloading = false
 		powerPilotUpdateState.PackagePath = finalPath
 		powerPilotUpdateState.Unlock()
-		pushAppNotification(notifSuccess, "PowerPilot готов к обновлению", "Версия "+latest+" проверена. Перезапускаю приложение…", notifTargetData)
 		invalidate(app.hwnd)
 		time.Sleep(220 * time.Millisecond)
 		app.exiting = true
 		pSendMessageW.Call(app.hwnd, WM_CLOSE, 0, 0)
 	}()
+}
+
+func launchUpdaterElevated(updaterPath, dir string, args []string) error {
+	verb, _ := syscall.UTF16PtrFromString("runas")
+	file, _ := syscall.UTF16PtrFromString(updaterPath)
+	params, _ := syscall.UTF16PtrFromString(strings.Join(escapeWindowsArgs(args), " "))
+	workDir, _ := syscall.UTF16PtrFromString(dir)
+	shellExecute := shell32.NewProc("ShellExecuteW")
+	r, _, callErr := shellExecute.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(file)), uintptr(unsafe.Pointer(params)), uintptr(unsafe.Pointer(workDir)), SW_HIDE)
+	if r <= 32 {
+		return fmt.Errorf("ShellExecuteW code %d: %v", r, callErr)
+	}
+	return nil
+}
+
+func escapeWindowsArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, arg := range args {
+		out[i] = syscall.EscapeArg(arg)
+	}
+	return out
 }
 
 func extractPowerPilotUpdater(packagePath, dir string) (string, error) {

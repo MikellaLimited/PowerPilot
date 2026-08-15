@@ -100,7 +100,7 @@ func getExecVisual040() visualSnapshot040 {
 
 func drawScenarioPreview040(hdc uintptr, body RECT) {
 	drawButton(hdc, app.previewBackRect, "← Назад", false)
-	drawText(hdc, "Предпросмотр блок-схемы", int(body.Left)+144, int(body.Top)+18, int(body.Right-body.Left)-168, 30, 19, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Предпросмотр блок-схемы", int(body.Left)+144, int(body.Top)+18, int(body.Right-body.Left)-288, 30, 19, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	conds := currentScenarioConditions()
 	steps := currentScenarioSteps()
 	vs := getExecVisual040()
@@ -111,6 +111,17 @@ func drawScenarioPreview040(hdc uintptr, body RECT) {
 		if idx >= len(app.previewRows) {
 			break
 		}
+		depth := scenarioConditionDepth(conds, i)
+		r := app.previewRows[idx]
+		if depth > 0 {
+			r.Left += int32(depth * 18)
+		}
+		if c.Type == condGroup {
+			label := fmt.Sprintf("Составное условие · %d элементов", scenarioGroupDescendantCount(conds, c.ID))
+			drawPreviewGroupNode040(hdc, r, label, depth)
+			idx++
+			continue
+		}
 		ok, _ := diagnoseCondition(c)
 		col := theme.muted
 		if ok {
@@ -118,7 +129,12 @@ func drawScenarioPreview040(hdc uintptr, body RECT) {
 		} else if app.schedule.active {
 			col = theme.accent2
 		}
-		drawPreviewNode040(hdc, app.previewRows[idx], fmt.Sprintf("Условие %d · %s", i+1, conditionSummary(c)), col)
+		if depth > 0 {
+			branchX := app.previewRows[idx].Left + int32(depth*18) - 10
+			d2dDrawLine(float32(branchX), float32(r.Top-7), float32(branchX), float32(r.Bottom/2+r.Top/2), 1.2, blendColor(theme.border, theme.accent2, .52))
+			d2dDrawLine(float32(branchX), float32((r.Top+r.Bottom)/2), float32(r.Left), float32((r.Top+r.Bottom)/2), 1.2, blendColor(theme.border, theme.accent2, .52))
+		}
+		drawPreviewNode040(hdc, r, conditionSummary(c), col)
 		idx++
 	}
 	for i, st := range steps {
@@ -145,6 +161,24 @@ func drawScenarioPreview040(hdc uintptr, body RECT) {
 		}
 		drawPreviewNode040(hdc, app.previewRows[idx], "Финальное действие · "+currentScenarioActionSummary(), col)
 	}
+}
+
+func drawPreviewGroupNode040(hdc uintptr, r RECT, label string, depth int) {
+	if r.Right <= r.Left {
+		return
+	}
+	if depth > 0 {
+		branchX := r.Left - 10
+		d2dDrawLine(float32(branchX), float32(r.Top-7), float32(branchX), float32((r.Top+r.Bottom)/2), 1.2, blendColor(theme.border, theme.accent2, .58))
+		d2dDrawLine(float32(branchX), float32((r.Top+r.Bottom)/2), float32(r.Left), float32((r.Top+r.Bottom)/2), 1.2, blendColor(theme.border, theme.accent2, .58))
+	}
+	fillColor := blendColor(surfaceButtonColor(), theme.accent, .22)
+	roundFill(hdc, r, fillColor, 11)
+	if ui2d.active {
+		d2dDrawRoundedOutline(r, 11, 1.2, blendColor(theme.border, theme.accent2, .62))
+	}
+	drawText(hdc, "▾", int(r.Left)+8, int(r.Top), 22, int(r.Bottom-r.Top), 13, 700, theme.accent2, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, label, int(r.Left)+34, int(r.Top), int(r.Right-r.Left)-46, int(r.Bottom-r.Top), 11, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 }
 func previewStatusColor040(active, done, failed bool) uint32 {
 	if failed {

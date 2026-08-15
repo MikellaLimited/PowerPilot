@@ -338,17 +338,21 @@ func drawNotificationPanel(hdc uintptr) {
 	drawText(hdc, countText, int(p.Left)+150, int(p.Top)+13, int(p.Right-p.Left)-166, 24, 9, 500, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 
 	drawButton(hdc, app.notificationUnreadOnlyRect, map[bool]string{true: "Непрочитанные", false: "Все"}[app.notificationUnreadOnly], app.notificationUnreadOnly)
-	drawOutlinedButton(hdc, app.notificationMarkReadRect, "Прочитано", theme.accent2)
-	drawOutlinedButton(hdc, app.notificationClearRect, "Очистить", theme.muted)
+	drawOutlinedButton(hdc, app.notificationMarkReadRect, "Пометить всё прочитанным", theme.accent2)
+	drawScenarioIconButton(hdc, app.notificationClearRect, scenarioIconNotificationClear)
 
 	items := notificationItemsSnapshot(app.notificationUnreadOnly)
-	visible := minInt(len(items), len(app.notificationRows))
-	for i := 0; i < visible; i++ {
-		r := app.notificationRows[i]
-		if r.Right <= r.Left {
-			break
+	visible := 0
+	if ui2d.active && app.notificationListClip.Right > app.notificationListClip.Left {
+		d2dPushClip(app.notificationListClip)
+	}
+	for slot, r := range app.notificationRows {
+		idx := app.notificationRowIndices[slot]
+		if idx < 0 || idx >= len(items) || r.Right <= r.Left || r.Bottom <= app.notificationListClip.Top || r.Top >= app.notificationListClip.Bottom {
+			continue
 		}
-		n := items[i]
+		visible++
+		n := items[idx]
 		base := surfaceButtonColor()
 		if n.Unread {
 			base = blendColor(base, notificationKindColor(n.Kind), .08)
@@ -362,10 +366,17 @@ func drawNotificationPanel(hdc uintptr) {
 			d2dFillEllipse(float32(r.Left+8), float32(r.Top+10), 3.5, 3.5, notificationKindColor(n.Kind))
 		}
 		titleX := int(r.Left) + 16
-		drawText(hdc, n.Title, titleX, int(r.Top)+5, int(r.Right)-titleX-70, 17, 10, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		drawText(hdc, notificationTimeLabel(n.When), int(r.Right)-68, int(r.Top)+5, 56, 17, 8, 500, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
-		drawText(hdc, n.Text, titleX, int(r.Top)+24, int(r.Right)-titleX-12, 17, 9, 450, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		drawText(hdc, n.Title, titleX, int(r.Top)+5, int(r.Right)-titleX-108, 17, 10, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		drawText(hdc, notificationTimeLabel(n.When), int(r.Right)-102, int(r.Top)+5, 60, 17, 8, 500, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, n.Text, titleX, int(r.Top)+24, int(r.Right)-titleX-46, 17, 9, 450, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		if n.Unread {
+			drawScenarioIconButton(hdc, app.notificationReadRects[slot], scenarioIconNotificationRead)
+		}
 	}
+	if ui2d.active && app.notificationListClip.Right > app.notificationListClip.Left {
+		d2dPopClip()
+	}
+	drawScrollBar(hdc, app.notificationScrollTrack, app.notificationScrollThumb)
 	if visible == 0 {
 		empty := "Уведомлений пока нет."
 		if app.notificationUnreadOnly {
@@ -373,9 +384,31 @@ func drawNotificationPanel(hdc uintptr) {
 		}
 		drawText(hdc, empty, int(p.Left)+18, int(app.notificationUnreadOnlyRect.Bottom)+42, int(p.Right-p.Left)-36, 40, 11, 500, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
-	if len(items) > visible {
-		drawText(hdc, fmt.Sprintf("Показаны последние %d из %d", visible, len(items)), int(p.Left)+16, int(p.Bottom)-22, int(p.Right-p.Left)-32, 14, 8, 450, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
+	if app.confirmClearNotifications {
+		drawNotificationClearConfirmation(hdc, p)
+	} else {
+		drawScenarioTooltip(hdc, p)
 	}
+}
+
+func drawNotificationClearConfirmation(hdc uintptr, panel RECT) {
+	fill(hdc, panel, blendColor(theme.bg, rgb(0, 0, 0), .46))
+	w := minInt(320, int(panel.Right-panel.Left)-32)
+	h := 154
+	x := int(panel.Left+panel.Right)/2 - w/2
+	y := int(panel.Top+panel.Bottom)/2 - h/2
+	app.notificationConfirmRect = RECT{int32(x), int32(y), int32(x + w), int32(y + h)}
+	roundFill(hdc, app.notificationConfirmRect, surfacePanelColor(), 14)
+	if ui2d.active {
+		d2dDrawRoundedOutline(app.notificationConfirmRect, 14, 1, blendColor(theme.border, theme.danger, .35))
+	}
+	drawText(hdc, "Очистить уведомления?", x+16, y+16, w-32, 24, 16, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "История уведомлений будет удалена без возможности восстановления.", x+20, y+46, w-40, 38, 10, 450, theme.muted, DT_CENTER|DT_VCENTER|DT_WORDBREAK)
+	btnY := y + 102
+	app.notificationConfirmNoRect = RECT{int32(x + 16), int32(btnY), int32(x + w/2 - 6), int32(btnY + 38)}
+	app.notificationConfirmYesRect = RECT{int32(x + w/2 + 6), int32(btnY), int32(x + w - 16), int32(btnY + 38)}
+	drawButton(hdc, app.notificationConfirmNoRect, "Отмена", false)
+	drawOutlinedButton(hdc, app.notificationConfirmYesRect, "Очистить", theme.danger)
 }
 
 func handleNotificationCenterClick(x, y int32) bool {
@@ -384,18 +417,46 @@ func handleNotificationCenterClick(x, y int32) bool {
 	}
 	if pointIn(app.notificationBtnRect, x, y) {
 		app.notificationPanelOpen = !app.notificationPanelOpen
+		app.confirmClearNotifications = false
 		app.taskMenuOpen, app.createTaskMenuOpen, app.resourceMenuOpen = false, false, false
 		playUI(clickSound)
 		layoutControls(app.hwnd)
+		if app.notificationPanelOpen {
+			hideNativeInputs()
+		} else {
+			updateInputVisibility()
+		}
 		invalidate(app.hwnd)
 		return true
 	}
 	if !app.notificationPanelOpen {
 		return false
 	}
+	if app.confirmClearNotifications {
+		if pointIn(app.notificationConfirmYesRect, x, y) {
+			clearNotifications()
+			app.confirmClearNotifications = false
+			app.notificationScrollPx, app.notificationScrollTarget = 0, 0
+			playUI(successSound)
+			layoutControls(app.hwnd)
+			invalidate(app.hwnd)
+			return true
+		}
+		if pointIn(app.notificationConfirmNoRect, x, y) || !pointIn(app.notificationConfirmRect, x, y) {
+			app.confirmClearNotifications = false
+			playUI(clickSound)
+			invalidate(app.hwnd)
+		}
+		return true
+	}
+	if beginScrollbarInteraction(x, y) {
+		return true
+	}
 	if pointIn(app.notificationUnreadOnlyRect, x, y) {
 		app.notificationUnreadOnly = !app.notificationUnreadOnly
+		app.notificationScrollPx, app.notificationScrollTarget = 0, 0
 		playUI(clickSound)
+		layoutControls(app.hwnd)
 		invalidate(app.hwnd)
 		return true
 	}
@@ -405,17 +466,26 @@ func handleNotificationCenterClick(x, y int32) bool {
 		return true
 	}
 	if pointIn(app.notificationClearRect, x, y) {
-		clearNotifications()
-		playUI(clickSound)
+		app.confirmClearNotifications = true
+		playUI(openSound)
+		invalidate(app.hwnd)
 		return true
 	}
 	items := notificationItemsSnapshot(app.notificationUnreadOnly)
-	for i, r := range app.notificationRows {
-		if i >= len(items) || r.Right <= r.Left {
-			break
+	for slot, r := range app.notificationRows {
+		idx := app.notificationRowIndices[slot]
+		if idx < 0 || idx >= len(items) || r.Right <= r.Left || !pointIn(app.notificationListClip, x, y) {
+			continue
+		}
+		n := items[idx]
+		if n.Unread && pointIn(app.notificationReadRects[slot], x, y) {
+			markNotificationRead(n.ID)
+			playUI(successSound)
+			layoutControls(app.hwnd)
+			invalidate(app.hwnd)
+			return true
 		}
 		if pointIn(r, x, y) {
-			n := items[i]
 			markNotificationRead(n.ID)
 			app.notificationPanelOpen = false
 			openNotificationTarget(n.Target)
@@ -427,7 +497,9 @@ func handleNotificationCenterClick(x, y int32) bool {
 		return true
 	}
 	app.notificationPanelOpen = false
+	app.confirmClearNotifications = false
 	layoutControls(app.hwnd)
+	updateInputVisibility()
 	invalidate(app.hwnd)
 	return false
 }

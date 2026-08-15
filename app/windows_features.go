@@ -113,6 +113,13 @@ func normalizeSettings() {
 	if app.settings.ResourceRefreshMS != 250 && app.settings.ResourceRefreshMS != 500 && app.settings.ResourceRefreshMS != 1000 && app.settings.ResourceRefreshMS != 2000 && app.settings.ResourceRefreshMS != 5000 {
 		app.settings.ResourceRefreshMS = 1000
 	}
+	if app.settings.ResourceTimelineMode < 0 || app.settings.ResourceTimelineMode > 1 {
+		app.settings.ResourceTimelineMode = 0
+	}
+	app.settings.AdvancedConditions = migrateLegacyConditionGroups(app.settings.AdvancedConditions)
+	for i := range app.settings.SavedTasks {
+		app.settings.SavedTasks[i].Conditions = migrateLegacyConditionGroups(app.settings.SavedTasks[i].Conditions)
+	}
 	if app.settings.SoundVolume < 0 || app.settings.SoundVolume > 100 {
 		app.settings.SoundVolume = 65
 	}

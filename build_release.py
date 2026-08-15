@@ -6,15 +6,15 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parent
 OUT=ROOT/'release'
 GOENV={**os.environ,'GOOS':'windows','GOARCH':'amd64','CGO_ENABLED':'0','GO111MODULE':'off'}
-LDFLAGS='-s -w -H windowsgui'
+BASE_LDFLAGS='-s -w -H windowsgui'
 
 def run(args,cwd=None):
     print('+',' '.join(map(str,args)))
     subprocess.run(args,cwd=cwd or ROOT,env=GOENV,check=True)
 
-def build(pkg:Path,out:Path):
+def build(pkg:Path,out:Path,ldflags:str=BASE_LDFLAGS):
     run(['go','test','./...'],cwd=pkg)
-    run(['go','build','-trimpath','-ldflags',LDFLAGS,'-o',str(out),'.'],cwd=pkg)
+    run(['go','build','-trimpath','-ldflags',ldflags,'-o',str(out),'.'],cwd=pkg)
 
 def sha(p:Path)->str:
     h=hashlib.sha256()
@@ -27,6 +27,15 @@ def version()->str:
     m=re.search(r'const\s+appVersion\s*=\s*"([^"]+)"',s)
     if not m: raise SystemExit('appVersion not found')
     return m.group(1)
+
+def build_identity()->tuple[str,str]:
+    channel=os.environ.get('POWERPILOT_CHANNEL','stable').strip().lower() or 'stable'
+    if channel not in {'stable','develop'}:
+        raise SystemExit(f'unsupported POWERPILOT_CHANNEL: {channel}')
+    build_version=os.environ.get('POWERPILOT_BUILD_VERSION',version()).strip()
+    if not build_version:
+        raise SystemExit('POWERPILOT_BUILD_VERSION must not be empty')
+    return channel,build_version
 
 def make_update_zip(ver:str, app:Path, updater:Path, out:Path):
     manifest={"version":ver,"files":[{"source":"PowerPilot.exe","role":"app","sha256":"sha256:"+sha(app)}]}
@@ -49,12 +58,14 @@ def make_source_zip(ver:str,out:Path):
             z.write(p,prefix+rel.as_posix())
 
 def main():
-    ver=version()
+    channel,ver=build_identity()
     if OUT.exists(): shutil.rmtree(OUT)
     OUT.mkdir(parents=True)
     tmp=OUT/'_tmp'; tmp.mkdir()
     icon=ROOT/'app/assets/PowerPilot.ico'
-    build(ROOT/'app',tmp/'PowerPilot.raw.exe')
+    app_ldflags=BASE_LDFLAGS+f' -X main.powerPilotBuildVersion={ver} -X main.powerPilotUpdateChannel={channel}'
+    installer_ldflags=BASE_LDFLAGS+f' -X main.installerVersion={ver}'
+    build(ROOT/'app',tmp/'PowerPilot.raw.exe',app_ldflags)
     run([sys.executable,str(ROOT/'patch_pe_icon.py'),str(tmp/'PowerPilot.raw.exe'),str(icon),str(OUT/'PowerPilot.exe')])
     build(ROOT/'updater',OUT/'PowerPilot.Update.exe')
     build(ROOT/'uninstaller',tmp/'Uninstall.raw.exe')
@@ -63,7 +74,7 @@ def main():
     shutil.copy2(OUT/'PowerPilot.exe',payload/'PowerPilot.exe')
     shutil.copy2(OUT/'Uninstall.exe',payload/'Uninstall.exe')
     shutil.copy2(icon,payload/'PowerPilot.ico')
-    build(ROOT/'installer',tmp/'Setup.raw.exe')
+    build(ROOT/'installer',tmp/'Setup.raw.exe',installer_ldflags)
     run([sys.executable,str(ROOT/'patch_pe_icon.py'),str(tmp/'Setup.raw.exe'),str(ROOT/'installer/assets/PowerPilot.ico'),str(OUT/'PowerPilot_Setup.exe')])
     if sha(OUT/'PowerPilot.exe') != sha(payload/'PowerPilot.exe'): raise SystemExit('installer payload mismatch')
     run([sys.executable,str(ROOT/'release_checks.py'),str(OUT),str(icon)])
@@ -74,6 +85,10 @@ def main():
     make_source_zip(ver,OUT/f'PowerPilot_{ver}_source.zip')
     notes=ROOT/'RELEASE_NOTES.txt'
     if notes.exists(): shutil.copy2(notes,OUT/f'PowerPilot_{ver}_RELEASE_NOTES.txt')
+    if channel == 'develop':
+        shutil.copy2(OUT/f'PowerPilot_Setup_{ver}.exe',OUT/'PowerPilot_Develop_Setup.exe')
+        shutil.copy2(OUT/f'PowerPilot_Portable_{ver}.exe',OUT/'PowerPilot_Develop_Portable.exe')
+        shutil.copy2(OUT/f'PowerPilot_Update_{ver}.zip',OUT/'PowerPilot_Develop_Update.zip')
     validation=OUT/'release_validation.json'
     if validation.exists():
         report=json.loads(validation.read_text(encoding='utf-8'))
@@ -81,6 +96,7 @@ def main():
         for a in [OUT/f'PowerPilot_Setup_{ver}.exe', OUT/f'PowerPilot_Portable_{ver}.exe', OUT/f'PowerPilot_Update_{ver}.zip', OUT/f'PowerPilot_{ver}_source.zip', OUT/f'PowerPilot_{ver}_RELEASE_NOTES.txt']:
             if a.exists(): artifacts[a.name]={"bytes":a.stat().st_size,"sha256":sha(a)}
         report['version']=ver
+        report['channel']=channel
         report['release_artifacts']=artifacts
         report['setup_explorer_file_icon_visual_check']='PENDING'
         report['windows_runtime_update_cycle']='NOT RUN'
