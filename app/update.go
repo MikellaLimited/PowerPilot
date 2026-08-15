@@ -25,7 +25,7 @@ import (
 
 const (
 	powerPilotUpdateRepo     = "MikellaLimited/PowerPilot"
-	powerPilotUpdateInterval = 6 * time.Hour
+	powerPilotUpdateInterval = 30 * time.Minute
 )
 
 // These variables are overridden with -ldflags for rolling develop builds.
@@ -331,7 +331,7 @@ func powerPilotUpdateCard() (string, string) {
 	if !powerPilotUpdateState.LastCheck.IsZero() {
 		return "Обновления PowerPilot", "Установлена последняя версия " + currentPowerPilotVersion() + " · проверено " + powerPilotUpdateState.LastCheck.Format("15:04")
 	}
-	return "Обновления PowerPilot", "Автопроверка при запуске и каждые 6 часов через GitHub Releases"
+	return "Обновления PowerPilot", "Автопроверка при запуске и каждые 30 минут через GitHub Releases"
 }
 
 func powerPilotUpdateActionLabel() (string, bool) {
