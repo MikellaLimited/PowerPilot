@@ -821,6 +821,9 @@ var pGetKeyState040 = v040User32.NewProc("GetKeyState")
 
 func keyDown040(vk uintptr) bool { r, _, _ := pGetKeyState040.Call(vk); return int16(r&0xffff) < 0 }
 func handleKeyDown040(vk uintptr) bool {
+	if handleGraphKeyboard(vk) {
+		return true
+	}
 	ctrl := keyDown040(0x11)
 	if ctrl {
 		switch vk {

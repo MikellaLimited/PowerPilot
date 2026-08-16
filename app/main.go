@@ -328,6 +328,7 @@ const (
 	WM_RESOURCE_UPDATED     = WM_APP + 3
 	WM_NOTIFICATION_CHANGED = WM_APP + 4
 	WM_RBUTTONUP            = 0x0205
+	WM_RBUTTONDOWN          = 0x0204
 	WM_LBUTTONDBLCLK        = 0x0203
 
 	MF_STRING       = 0x00000000
@@ -556,6 +557,7 @@ type Settings struct {
 	ResourceRefreshMS         int                   `json:"resource_refresh_ms"`
 	ResourceTimelineMode      int                   `json:"resource_timeline_mode,omitempty"` // 0 clock time, 1 relative to current sample
 	ResourceTimelineTicks     int                   `json:"resource_timeline_ticks,omitempty"`
+	GraphWindowSize           int                   `json:"graph_window_size,omitempty"`
 	IdleSecondsMigrated       bool                  `json:"idle_seconds_migrated,omitempty"`
 	GlobalHotkeys             bool                  `json:"global_hotkeys"`
 	TemperatureAutoUpdate     bool                  `json:"temperature_auto_update"`
@@ -1010,14 +1012,42 @@ type App struct {
 	graphSelectedNodeID                    string
 	graphConnectingNodeID                  string
 	graphConnectingPort                    string
-	graphDraggingNodeID                    string
 	graphDragging                          bool
-	graphPanning                           bool
 	graphLastMouseX                        int32
 	graphLastMouseY                        int32
 	graphValidation                        []GraphValidationIssue
 	graphWindow                            uintptr
 	graphDetachRect                        RECT
+	graphTitleBarRect                      RECT
+	graphTitleMinRect                      RECT
+	graphTitleMaxRect                      RECT
+	graphTitleCloseRect                    RECT
+	graphTitleHover                        int
+	graphWindowSizeRects                   [3]RECT
+	graphSelectedNodes                     map[string]bool
+	graphSelectedEdgeID                    string
+	graphMarquee                           bool
+	graphMarqueeAdditive                   bool
+	graphMarqueeStartX                     int32
+	graphMarqueeStartY                     int32
+	graphMarqueeX                          int32
+	graphMarqueeY                          int32
+	graphRightDown                         bool
+	graphRightPanning                      bool
+	graphRightStartX                       int32
+	graphRightStartY                       int32
+	graphContextOpen                       bool
+	graphContextRect                       RECT
+	graphContextItemRects                  []RECT
+	graphContextX                          int32
+	graphContextY                          int32
+	graphEditorOpen                        bool
+	graphEditorNodeID                      string
+	graphEditorItem                        int
+	graphEditorRect                        RECT
+	graphEditorCloseRect                   RECT
+	graphEditorActionRects                 [10]RECT
+	graphEditorText                        uintptr
 	mu                                     sync.Mutex
 	exiting                                bool
 	pageAnim                               float64
@@ -1155,7 +1185,7 @@ func runUI() {
 	if icon == 0 {
 		icon, _, _ = pLoadIconW.Call(0, IDI_APPLICATION)
 	}
-	wc := WNDCLASSEX{CbSize: uint32(unsafe.Sizeof(WNDCLASSEX{})), Style: 0x0003, LpfnWndProc: syscall.NewCallback(wndProc), HInstance: hinst, HIcon: icon, HCursor: cursor, LpszClassName: cls, HIconSm: icon}
+	wc := WNDCLASSEX{CbSize: uint32(unsafe.Sizeof(WNDCLASSEX{})), Style: 0x000B, LpfnWndProc: syscall.NewCallback(wndProc), HInstance: hinst, HIcon: icon, HCursor: cursor, LpszClassName: cls, HIconSm: icon}
 	if r, _, _ := pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
 		panic("RegisterClassEx failed")
 	}
@@ -1302,6 +1332,23 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		clearEditFocusForCanvasClick(x, y)
 		onClick(x, y)
 		return 0
+	case WM_LBUTTONDBLCLK:
+		x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
+		if handleGraphDoubleClick(x, y) {
+			return 0
+		}
+	case WM_RBUTTONDOWN:
+		if app.section == 7 || app.section == 13 {
+			x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
+			beginGraphRightButton(x, y)
+			return 0
+		}
+	case WM_RBUTTONUP:
+		if app.section == 7 || app.section == 13 {
+			x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
+			finishGraphRightButton(x, y)
+			return 0
+		}
 	case WM_LBUTTONUP:
 		if finishScenarioGraphPointer() {
 			return 0
@@ -1444,6 +1491,10 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	case WM_DESTROY:
 		if app.graphWindow != 0 {
+			if app.graphEditorOpen {
+				syncGraphCompactText()
+				persistCurrentScenarioGraph()
+			}
 			graphWindow := app.graphWindow
 			app.graphWindow = 0
 			pDestroyWindow.Call(graphWindow)
@@ -2048,7 +2099,14 @@ func layoutControls(hwnd uintptr) {
 				x := innerLeft + i*(scaleW+scaleGap)
 				app.uiScaleRects[i] = RECT{int32(x), int32(scaleY), int32(x + scaleW), int32(scaleY + 38)}
 			}
-			timelineY := scaleY + 100
+			graphSizeY := scaleY + 126
+			graphSizeGap := 8
+			graphSizeW := (settingsContentW - graphSizeGap*2) / 3
+			for i := range app.graphWindowSizeRects {
+				x := innerLeft + i*(graphSizeW+graphSizeGap)
+				app.graphWindowSizeRects[i] = RECT{int32(x), int32(graphSizeY), int32(x + graphSizeW), int32(graphSizeY + 38)}
+			}
+			timelineY := graphSizeY + 100
 			selectorGap := 8
 			selectorW := (settingsContentW - selectorGap) / 2
 			for i := range app.resourceTimelineModeRects {
@@ -2791,7 +2849,7 @@ func settingsVirtualContentHeight() int {
 	case 6:
 		return 150
 	case 7:
-		return 540
+		return 670
 	}
 	return 0
 }
@@ -3846,6 +3904,11 @@ func drawInterfaceSettings040(hdc uintptr, body RECT) {
 		drawText(hdc, fmt.Sprintf("%d%%", scales[i]), int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 11, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
 	drawText(hdc, "Масштаб меняет весь интерфейс PowerPilot, включая поля ввода и размеры минимального окна.", int(body.Left)+18, int(app.uiScaleRects[0].Bottom)+16, int(body.Right-body.Left)-36, 34, 10, 400, theme.muted, DT_LEFT|DT_VCENTER)
+	drawText(hdc, "Размер отдельного редактора", int(body.Left)+18, int(app.graphWindowSizeRects[0].Top)-26, 280, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	graphSizes := []string{"1280 × 820", "1440 × 900", "1600 × 960"}
+	for i, r := range app.graphWindowSizeRects {
+		drawSelectableButton(hdc, r, graphSizes[i], app.settings.GraphWindowSize == i)
+	}
 	timelineTitleY := int(app.resourceTimelineModeRects[0].Top) - 24
 	drawText(hdc, "Временная шкала ресурсов", int(body.Left)+18, timelineTitleY, int(body.Right-body.Left)-36, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	modeNames := []string{"Реальное время", "Относительно: −время → 0"}
@@ -7657,6 +7720,15 @@ func onClick(x, y int32) {
 				return
 			}
 		case 7:
+			for i, r := range app.graphWindowSizeRects {
+				if pointIn(r, x, y) {
+					app.settings.GraphWindowSize = i
+					saveSettings()
+					playUI(clickSound)
+					invalidate(app.hwnd)
+					return
+				}
+			}
 			for i, r := range app.resourceTimelineModeRects {
 				if pointIn(r, x, y) {
 					app.settings.ResourceTimelineMode = i
@@ -9573,8 +9645,7 @@ func loadSavedTask(t SavedTask) {
 		app.modeAnim[app.selectedMode] = 1
 	}
 	if t.TaskKind == 1 {
-		app.graphSelectedNodeID = ""
-		app.graphConnectingNodeID, app.graphConnectingPort = "", ""
+		resetGraphInteraction()
 		app.section = 7
 		app.lastTaskSection = 2
 	} else {
@@ -9703,6 +9774,7 @@ func openSavedTaskEditor(idx int) {
 	pSetWindowTextW.Call(app.edits[idWarning], uintptr(unsafe.Pointer(wstr(strconv.Itoa(max(app.savedEditDraft.WarningSeconds, 0))))))
 	app.savedMenuOpenIdx = -1
 	if app.savedEditDraft.TaskKind == 1 {
+		resetGraphInteraction()
 		app.scenarioSavedDraft = true
 		app.scenarioReturnSection = 5
 		app.section = 13

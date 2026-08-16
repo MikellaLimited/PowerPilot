@@ -27,7 +27,7 @@ func openScenarioGraphWindow() {
 		if icon == 0 {
 			icon, _, _ = pLoadIconW.Call(0, IDI_APPLICATION)
 		}
-		wc := WNDCLASSEX{CbSize: uint32(unsafe.Sizeof(WNDCLASSEX{})), Style: 0x0003, LpfnWndProc: syscall.NewCallback(scenarioGraphWindowProc), HInstance: hinst, HIcon: icon, HCursor: cursor, LpszClassName: className, HIconSm: icon}
+		wc := WNDCLASSEX{CbSize: uint32(unsafe.Sizeof(WNDCLASSEX{})), Style: 0x000B, LpfnWndProc: syscall.NewCallback(scenarioGraphWindowProc), HInstance: hinst, HIcon: icon, HCursor: cursor, LpszClassName: className, HIconSm: icon}
 		if registered, _, _ := pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); registered == 0 {
 			message("PowerPilot", "Не удалось создать класс отдельного окна редактора.", MB_OK|MB_ICONERROR)
 			return
@@ -35,7 +35,8 @@ func openScenarioGraphWindow() {
 		graphWindowClassRegistered = true
 	}
 
-	x, y, width, height := 80, 60, 1280, 820
+	width, height := scenarioGraphWindowSize()
+	x, y := 80, 60
 	var mainRect RECT
 	if app.hwnd != 0 {
 		if ok, _, _ := pGetWindowRect.Call(app.hwnd, uintptr(unsafe.Pointer(&mainRect))); ok != 0 {
@@ -43,7 +44,7 @@ func openScenarioGraphWindow() {
 			y = int(mainRect.Top) + 34
 		}
 	}
-	style := uintptr(WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS)
+	style := uintptr(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_CLIPCHILDREN | WS_CLIPSIBLINGS)
 	title := wstr("PowerPilot — Редактор сценария")
 	hwnd, _, _ := pCreateWindowExW.Call(WS_EX_APPWINDOW, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(title)), style, uintptr(x), uintptr(y), uintptr(width), uintptr(height), 0, 0, hinst, 0)
 	if hwnd == 0 {
@@ -51,6 +52,8 @@ func openScenarioGraphWindow() {
 		return
 	}
 	app.graphWindow = hwnd
+	app.graphTitleHover = -1
+	applyRoundedWindowCorners(hwnd)
 	if app.appIcon != 0 {
 		pSendMessageW.Call(hwnd, WM_SETICON, 1, app.appIcon)
 		pSendMessageW.Call(hwnd, WM_SETICON, 0, app.appIcon)
@@ -60,6 +63,17 @@ func openScenarioGraphWindow() {
 	pSetForegroundWindowGraph.Call(hwnd)
 	layoutControls(app.hwnd)
 	invalidateScenarioGraphWindows()
+}
+
+func scenarioGraphWindowSize() (int, int) {
+	switch app.settings.GraphWindowSize {
+	case 1:
+		return 1440, 900
+	case 2:
+		return 1600, 960
+	default:
+		return 1280, 820
+	}
 }
 
 func focusMainFromScenarioGraph() {
@@ -121,32 +135,90 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 	case WM_GETMINMAXINFO:
 		mmi := (*MINMAXINFO)(unsafe.Pointer(lParam))
 		mmi.PtMinTrackSize = POINT{900, 580}
+		if monitor, _, _ := pMonitorFromWindow.Call(hwnd, MONITOR_DEFAULTTONEAREST); monitor != 0 {
+			info := MONITORINFO{CbSize: uint32(unsafe.Sizeof(MONITORINFO{}))}
+			if ok, _, _ := pGetMonitorInfoW.Call(monitor, uintptr(unsafe.Pointer(&info))); ok != 0 {
+				mmi.PtMaxPosition = POINT{info.RcWork.Left - info.RcMonitor.Left, info.RcWork.Top - info.RcMonitor.Top}
+				mmi.PtMaxSize = POINT{info.RcWork.Right - info.RcWork.Left, info.RcWork.Bottom - info.RcWork.Top}
+			}
+		}
 		return 0
 	case WM_SIZE:
+		applyRoundedWindowCorners(hwnd)
 		pInvalidateRect.Call(hwnd, 0, 0)
 		return 0
+	case WM_NCCALCSIZE:
+		return 0
+	case WM_NCACTIVATE:
+		return 1
+	case WM_NCHITTEST:
+		return hitTestScenarioGraphWindow(hwnd, lParam)
 	case WM_PAINT:
 		paintScenarioGraphWindow(hwnd)
 		return 0
 	case WM_ERASEBKGND:
 		return 1
+	case WM_CTLCOLOREDIT:
+		pSetBkMode.Call(wParam, TRANSPARENT)
+		pSetTextColor.Call(wParam, uintptr(theme.text))
+		return controlBrush
 	case WM_MOUSEMOVE:
 		x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
 		app.mouseX, app.mouseY = x, y
+		app.graphTitleHover = -1
+		for i, r := range []RECT{app.graphTitleMinRect, app.graphTitleMaxRect, app.graphTitleCloseRect} {
+			if pointIn(r, x, y) {
+				app.graphTitleHover = i
+			}
+		}
 		handleScenarioGraphMouseMove(x, y)
 		pInvalidateRect.Call(hwnd, 0, 0)
 		return 0
 	case WM_LBUTTONDOWN:
 		x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
 		app.mouseX, app.mouseY = x, y
+		if pointIn(app.graphTitleCloseRect, x, y) {
+			pDestroyWindow.Call(hwnd)
+			return 0
+		}
+		if pointIn(app.graphTitleMinRect, x, y) {
+			pShowWindow.Call(hwnd, SW_MINIMIZE)
+			return 0
+		}
+		if pointIn(app.graphTitleMaxRect, x, y) {
+			if zoomed, _, _ := pIsZoomed.Call(hwnd); zoomed != 0 {
+				pShowWindow.Call(hwnd, SW_RESTORE)
+			} else {
+				pShowWindow.Call(hwnd, SW_MAXIMIZE)
+			}
+			return 0
+		}
 		scenarioGraphDetachedInput = true
 		handleScenarioGraphClick(x, y)
+		scenarioGraphDetachedInput = false
+		pInvalidateRect.Call(hwnd, 0, 0)
+		return 0
+	case WM_LBUTTONDBLCLK:
+		x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
+		app.mouseX, app.mouseY = x, y
+		scenarioGraphDetachedInput = true
+		handleGraphDoubleClick(x, y)
 		scenarioGraphDetachedInput = false
 		pInvalidateRect.Call(hwnd, 0, 0)
 		return 0
 	case WM_LBUTTONUP:
 		finishScenarioGraphPointer()
 		pInvalidateRect.Call(hwnd, 0, 0)
+		return 0
+	case WM_RBUTTONDOWN:
+		x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
+		app.mouseX, app.mouseY = x, y
+		beginGraphRightButton(x, y)
+		return 0
+	case WM_RBUTTONUP:
+		x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
+		app.mouseX, app.mouseY = x, y
+		finishGraphRightButton(x, y)
 		return 0
 	case WM_MOUSEWHEEL:
 		zoomScenarioGraph(int16((wParam >> 16) & 0xFFFF))
@@ -157,13 +229,18 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 			return 0
 		}
 	case WM_CLOSE:
+		if app.graphEditorOpen {
+			syncGraphCompactText()
+			persistCurrentScenarioGraph()
+		}
 		pDestroyWindow.Call(hwnd)
 		return 0
 	case WM_DESTROY:
 		if app.graphWindow == hwnd {
+			app.graphEditorText = 0
+			app.graphEditorOpen = false
 			app.graphWindow = 0
-			app.graphDragging, app.graphPanning = false, false
-			app.graphDraggingNodeID = ""
+			app.graphDragging = false
 			pReleaseCapture.Call()
 			if app.hwnd != 0 {
 				layoutControls(app.hwnd)
@@ -186,11 +263,17 @@ func paintScenarioGraphWindow(hwnd uintptr) {
 		return
 	}
 	logical := logicalClientRect040(physical)
-	body := RECT{14, 14, logical.Right - 14, logical.Bottom - 14}
+	app.graphTitleBarRect = RECT{0, 0, logical.Right, 46}
+	btnW := int32(46)
+	app.graphTitleCloseRect = RECT{logical.Right - btnW, 0, logical.Right, 46}
+	app.graphTitleMaxRect = RECT{logical.Right - btnW*2, 0, logical.Right - btnW, 46}
+	app.graphTitleMinRect = RECT{logical.Right - btnW*3, 0, logical.Right - btnW*2, 46}
+	body := RECT{14, 58, logical.Right - 14, logical.Bottom - 14}
 	layoutScenarioGraphEditor(body, true)
 	if d2dBegin(hdc, physical) {
 		d2dSetBaseScale040(float32(uiScaleFactor040()))
 		d2dClear(theme.bg)
+		drawScenarioGraphTitleBar(hdc, logical, hwnd)
 		roundFill(hdc, body, surfacePanelColor(), 18)
 		drawScenarioGraphEditor(hdc, body, int(logical.Right), true)
 		d2dEnd()
@@ -198,6 +281,89 @@ func paintScenarioGraphWindow(hwnd uintptr) {
 	}
 	d2dSetBaseScale040(1)
 	fill(hdc, physical, theme.bg)
+	drawScenarioGraphTitleBar(hdc, logical, hwnd)
 	roundFill(hdc, body, surfacePanelColor(), 18)
 	drawScenarioGraphEditor(hdc, body, int(logical.Right), true)
+}
+
+func drawScenarioGraphTitleBar(hdc uintptr, rc RECT, hwnd uintptr) {
+	bar := blendColor(theme.bg, surfacePanelColor(), .74)
+	fill(hdc, app.graphTitleBarRect, bar)
+	d2dDrawAppIcon(RECT{14, 10, 40, 36})
+	drawText(hdc, "PowerPilot — Редактор сценария", 48, 0, int(rc.Right)-210, 46, 14, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	buttons := []RECT{app.graphTitleMinRect, app.graphTitleMaxRect, app.graphTitleCloseRect}
+	for i, r := range buttons {
+		color := bar
+		if app.graphTitleHover == i {
+			color = blendColor(bar, surfaceButtonColor(), .82)
+		}
+		if i == 2 && app.graphTitleHover == i {
+			color = theme.danger
+		}
+		fill(hdc, r, color)
+		drawScenarioGraphCaptionGlyph(hdc, i, r, hwnd)
+	}
+}
+
+func drawScenarioGraphCaptionGlyph(hdc uintptr, kind int, r RECT, hwnd uintptr) {
+	cx, cy := float32(r.Left+r.Right)/2, float32(r.Top+r.Bottom)/2
+	if ui2d.active {
+		switch kind {
+		case 0:
+			d2dDrawLine(cx-6, cy+3, cx+6, cy+3, 1.35, theme.text)
+		case 1:
+			if zoomed, _, _ := pIsZoomed.Call(hwnd); zoomed != 0 {
+				d2dDrawRectOutline(RECT{int32(cx - 4), int32(cy - 6), int32(cx + 6), int32(cy + 4)}, 1.2, theme.text)
+				d2dDrawRectOutline(RECT{int32(cx - 6), int32(cy - 4), int32(cx + 4), int32(cy + 6)}, 1.2, theme.text)
+			} else {
+				d2dDrawRectOutline(RECT{int32(cx - 5), int32(cy - 5), int32(cx + 5), int32(cy + 5)}, 1.3, theme.text)
+			}
+		case 2:
+			d2dDrawLine(cx-5, cy-5, cx+5, cy+5, 1.35, theme.text)
+			d2dDrawLine(cx+5, cy-5, cx-5, cy+5, 1.35, theme.text)
+		}
+		return
+	}
+	glyphs := []string{"—", "□", "×"}
+	drawText(hdc, glyphs[kind], int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 14, 500, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+}
+
+func hitTestScenarioGraphWindow(hwnd uintptr, lParam uintptr) uintptr {
+	pt := POINT{X: int32(int16(loword(lParam))), Y: int32(int16(hiword(lParam)))}
+	pScreenToClient.Call(hwnd, uintptr(unsafe.Pointer(&pt)))
+	var rc RECT
+	pGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
+	if zoomed, _, _ := pIsZoomed.Call(hwnd); zoomed == 0 {
+		const edge int32 = 7
+		left, right := pt.X < edge, pt.X >= rc.Right-edge
+		top, bottom := pt.Y < edge, pt.Y >= rc.Bottom-edge
+		switch {
+		case top && left:
+			return HTTOPLEFT
+		case top && right:
+			return HTTOPRIGHT
+		case bottom && left:
+			return HTBOTTOMLEFT
+		case bottom && right:
+			return HTBOTTOMRIGHT
+		case left:
+			return HTLEFT
+		case right:
+			return HTRIGHT
+		case top:
+			return HTTOP
+		case bottom:
+			return HTBOTTOM
+		}
+	}
+	lx, ly := clientPointToLogical040(pt.X, pt.Y)
+	for _, r := range []RECT{app.graphTitleMinRect, app.graphTitleMaxRect, app.graphTitleCloseRect} {
+		if pointIn(r, lx, ly) {
+			return HTCLIENT
+		}
+	}
+	if pointIn(app.graphTitleBarRect, lx, ly) {
+		return HTCAPTION
+	}
+	return HTCLIENT
 }

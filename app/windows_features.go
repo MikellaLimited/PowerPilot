@@ -116,6 +116,9 @@ func normalizeSettings() {
 	if app.settings.ResourceTimelineMode < 0 || app.settings.ResourceTimelineMode > 1 {
 		app.settings.ResourceTimelineMode = 0
 	}
+	if app.settings.GraphWindowSize < 0 || app.settings.GraphWindowSize > 2 {
+		app.settings.GraphWindowSize = 0
+	}
 	app.settings.AdvancedConditions = migrateLegacyConditionGroups(app.settings.AdvancedConditions)
 	for i := range app.settings.SavedTasks {
 		app.settings.SavedTasks[i].Conditions = migrateLegacyConditionGroups(app.settings.SavedTasks[i].Conditions)
