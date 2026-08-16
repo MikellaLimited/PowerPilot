@@ -120,6 +120,14 @@ func normalizeSettings() {
 	for i := range app.settings.SavedTasks {
 		app.settings.SavedTasks[i].Conditions = migrateLegacyConditionGroups(app.settings.SavedTasks[i].Conditions)
 	}
+	if app.settings.TaskKind == 1 || len(app.settings.AdvancedConditions) > 0 || len(app.settings.ActionSteps) > 0 {
+		app.settings.ScenarioGraph = ensureScenarioGraph(app.settings.ScenarioGraph, legacyTaskStateFromSettings(app.settings))
+	}
+	for i := range app.settings.SavedTasks {
+		if app.settings.SavedTasks[i].TaskKind == 1 {
+			app.settings.SavedTasks[i].Graph = ensureScenarioGraph(app.settings.SavedTasks[i].Graph, taskStateFromSaved040(app.settings.SavedTasks[i]))
+		}
+	}
 	if app.settings.SoundVolume < 0 || app.settings.SoundVolume > 100 {
 		app.settings.SoundVolume = 65
 	}

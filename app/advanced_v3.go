@@ -213,6 +213,15 @@ func compareSymbol(v int) string {
 }
 
 func buildDiagnosticReport(dry bool) []DiagnosticLine {
+	if app.currentTaskKind == 1 && (len(ensureCurrentScenarioGraph().Nodes) > 0) {
+		lines := []DiagnosticLine{}
+		if dry {
+			lines = append(lines, DiagnosticLine{diagInfo, "Тестовый прогон — без выполнения действий", "PowerPilot проверит маршрут графа, но не выполнит действия."})
+		} else {
+			lines = append(lines, DiagnosticLine{diagInfo, "Диагностика графа", "Показываю структуру, условия и доступность маршрутов сценария."})
+		}
+		return append(lines, graphDiagnosticLines(dry)...)
+	}
 	lines := []DiagnosticLine{}
 	title := "Диагностика текущей задачи"
 	if dry {

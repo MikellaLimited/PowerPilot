@@ -504,6 +504,7 @@ type SavedTask struct {
 	Favorite       bool                  `json:"favorite,omitempty"`
 	Paused         bool                  `json:"paused,omitempty"`
 	TaskKind       int                   `json:"task_kind,omitempty"` // 0 simple, 1 block
+	Graph          ScenarioGraph         `json:"graph,omitempty"`
 }
 
 type Settings struct {
@@ -559,6 +560,7 @@ type Settings struct {
 	GlobalHotkeys             bool                  `json:"global_hotkeys"`
 	TemperatureAutoUpdate     bool                  `json:"temperature_auto_update"`
 	SavedTasks                []SavedTask           `json:"saved_tasks"`
+	ScenarioGraph             ScenarioGraph         `json:"scenario_graph,omitempty"`
 }
 
 type HistoryItem struct {
@@ -602,6 +604,7 @@ type Schedule struct {
 	conditionsLogged bool
 	lastWaitDetail   string
 	lastWaitLog      time.Time
+	graph            ScenarioGraph
 }
 
 type App struct {
@@ -998,6 +1001,22 @@ type App struct {
 	resourceStatsSort                      int
 	resourceStatsSortDesc                  bool
 	conditionGroupCollapsed                map[string]bool
+	graphCanvasRect                        RECT
+	graphPaletteRects                      [5]RECT
+	graphZoomRects                         [3]RECT
+	graphNodeHits                          []GraphNodeHit
+	graphPortHits                          []GraphPortHit
+	graphFunctionHits                      []GraphFunctionHit
+	graphSelectedNodeID                    string
+	graphConnectingNodeID                  string
+	graphConnectingPort                    string
+	graphDraggingNodeID                    string
+	graphDragging                          bool
+	graphPanning                           bool
+	graphLastMouseX                        int32
+	graphLastMouseY                        int32
+	graphValidation                        []GraphValidationIssue
+	graphExpandedOnce                      bool
 	mu                                     sync.Mutex
 	exiting                                bool
 	pageAnim                               float64
@@ -1258,6 +1277,10 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	case WM_MOUSEWHEEL:
 		delta := int16((wParam >> 16) & 0xFFFF)
+		if app.section == 7 || app.section == 13 {
+			zoomScenarioGraph(delta)
+			return 0
+		}
 		queueSmoothScroll(delta)
 		return 0
 	case WM_MOUSELEAVE:
@@ -1279,6 +1302,9 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		onClick(x, y)
 		return 0
 	case WM_LBUTTONUP:
+		if finishScenarioGraphPointer() {
+			return 0
+		}
 		if app.draggingScenarioKind != 0 {
 			finishScenarioDrag()
 			pReleaseCapture.Call()
@@ -2268,6 +2294,9 @@ func layoutControls(hwnd uintptr) {
 
 	// Block task flowchart. Saved-task editing uses the same renderer with an isolated draft.
 	if app.section == 7 || app.section == 13 {
+		layoutScenarioGraphEditor(RECT{int32(innerLeft), int32(bodyTop), int32(innerRight), int32(bodyBottom)})
+	}
+	if false && (app.section == 7 || app.section == 13) {
 		app.scenarioBackRect = RECT{}
 		app.triggerLogicRect = RECT{}
 		toolX := innerLeft
@@ -4118,6 +4147,9 @@ func drawSafetySettings(hdc uintptr, body RECT) {
 }
 
 func currentScenarioConditions() []AutomationCondition {
+	if n := selectedGraphNode(); n != nil && n.Kind == graphNodeCondition {
+		return n.Conditions
+	}
 	if app.scenarioSavedDraft {
 		return app.savedEditDraft.Conditions
 	}
@@ -4229,12 +4261,20 @@ func conditionGroupWouldCycle(conds []AutomationCondition, groupID, parentID str
 	return false
 }
 func currentScenarioSteps() []ActionStep {
+	if n := selectedGraphNode(); n != nil && n.Kind == graphNodeAction {
+		return n.Steps
+	}
 	if app.scenarioSavedDraft {
 		return app.savedEditDraft.Steps
 	}
 	return app.settings.ActionSteps
 }
 func setCurrentScenarioConditions(v []AutomationCondition) {
+	if n := selectedGraphNode(); n != nil && n.Kind == graphNodeCondition {
+		n.Conditions = v
+		persistCurrentScenarioGraph()
+		return
+	}
 	if app.scenarioSavedDraft {
 		app.savedEditDraft.Conditions = v
 	} else {
@@ -4243,6 +4283,11 @@ func setCurrentScenarioConditions(v []AutomationCondition) {
 	}
 }
 func setCurrentScenarioSteps(v []ActionStep) {
+	if n := selectedGraphNode(); n != nil && n.Kind == graphNodeAction {
+		n.Steps = v
+		persistCurrentScenarioGraph()
+		return
+	}
 	if app.scenarioSavedDraft {
 		app.savedEditDraft.Steps = v
 	} else {
@@ -4277,18 +4322,27 @@ func setCurrentScenarioTriggerLogic(v int) {
 	}
 }
 func currentScenarioMode() int {
+	if tr := ensureCurrentScenarioGraph().trigger(); tr != nil {
+		return tr.Mode
+	}
 	if app.scenarioSavedDraft {
 		return app.savedEditDraft.Mode
 	}
 	return app.selectedMode
 }
 func currentScenarioAction() int {
+	if n := selectedGraphNode(); n != nil && n.Kind == graphNodeFinish {
+		return n.Action
+	}
 	if app.scenarioSavedDraft {
 		return app.savedEditDraft.Action
 	}
 	return app.selectedAction
 }
 func currentScenarioRecurrence() RecurrenceSpec {
+	if tr := ensureCurrentScenarioGraph().trigger(); tr != nil {
+		return tr.Recurrence
+	}
 	if app.scenarioSavedDraft {
 		return app.savedEditDraft.Recurrence
 	}
@@ -4383,215 +4437,222 @@ func scenarioDragOffset(kind, idx int) int32 {
 }
 
 func drawScenarioPage(hdc uintptr, body RECT, w int) {
-	if app.scenarioBackRect.Right > app.scenarioBackRect.Left {
-		drawButton(hdc, app.scenarioBackRect, "← Назад", false)
+	drawScenarioGraphEditor(hdc, body, w)
+	if app.confirmDiscardScenario {
+		drawScenarioDiscardConfirm(hdc, body)
 	}
-	if !app.scenarioSavedDraft && undoAvailable040() {
-		drawButton(hdc, app.undoRect, "↶", false)
-	} else {
-		drawDisabledButton(hdc, app.undoRect, "↶")
-	}
-	if !app.scenarioSavedDraft && redoAvailable040() {
-		drawButton(hdc, app.redoRect, "↷", false)
-	} else {
-		drawDisabledButton(hdc, app.redoRect, "↷")
-	}
-	drawButton(hdc, app.previewRect, "Просмотр", false)
-	titleX := int(app.redoRect.Right) + 16
-	if titleX < int(body.Left)+18 {
-		titleX = int(body.Left) + 18
-	}
-	titleW := int(app.previewRect.Left) - titleX - 14
-	// Never force the heading wider than the actual free space. The previous
-	// 160px minimum made it paint under the trigger-logic button on narrow windows.
-	if titleW >= 72 {
-		drawText(hdc, "Схема задачи", titleX, int(body.Top)+18, titleW, 28, 18, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	}
-
-	if app.scenarioSavedDraft && app.section == 13 {
-		drawText(hdc, "Название", int(app.savedScenarioNameRect.Left), int(app.savedScenarioNameRect.Top)-18, int(app.savedScenarioNameRect.Right-app.savedScenarioNameRect.Left), 16, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-		roundFill(hdc, app.savedScenarioNameRect, surfaceButtonColor(), 9)
-		drawButton(hdc, app.savedScenarioSaveRect, "Сохранить", true)
-		drawButton(hdc, app.savedScenarioCancelRect, "Отмена", false)
-		drawButton(hdc, app.savedScenarioCheckRect, "Проверка", false)
-	}
-
-	// Primary trigger node.
-	r := app.blockWhenRect
-	rv, hv := hoverCardRect(r)
-	c := blendColor(surfaceButtonColor(), theme.accent, .16)
-	if hv > 0 {
-		c = blendColor(c, theme.accent2, .08*hv)
-	}
-	roundFill(hdc, rv, c, 13)
-	if hv > 0 && ui2d.active {
-		d2dDrawRoundedOutline(rv, 13, float32(1+.35*hv), blendColor(theme.border, theme.accent2, .44))
-	}
-	drawText(hdc, "КОГДА", int(r.Left)+14, int(r.Top)+6, int(r.Right-r.Left)-28, 14, 9, 700, theme.accent2, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc, currentScenarioWhenSummary(), int(r.Left)+14, int(r.Top)+21, int(r.Right-r.Left)-28, 24, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-
-	innerLeft := int(body.Left) + 18
-	innerW := int(body.Right-body.Left) - 36
-	colGap := 18
-	colW := (innerW - colGap) / 2
-	rightX := innerLeft + colW + colGap
-	listTitleY := int(app.blockWhenRect.Bottom) + 12
-	// Connector from trigger into both branches.
-	midX := (app.blockWhenRect.Left + app.blockWhenRect.Right) / 2
-	roundFill(hdc, RECT{midX - 1, app.blockWhenRect.Bottom, midX + 1, int32(listTitleY - 3)}, blendColor(theme.border, theme.accent2, .40), 1)
-	drawText(hdc, "↓", int(midX)-10, listTitleY-11, 20, 18, 12, 650, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc, "УСЛОВИЯ", innerLeft, listTitleY, colW, 18, 10, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc, "ДЕЙСТВИЯ", rightX, listTitleY, colW, 18, 10, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-
-	conds := currentScenarioConditions()
-	steps := currentScenarioSteps()
-	if ui2d.active && app.scenarioListClip.Right > app.scenarioListClip.Left {
-		d2dPushClip(app.scenarioListClip)
-	}
-	for i, baseR := range app.conditionRows {
-		dataIdx := app.conditionRowIndices[i]
-		if dataIdx < 0 || dataIdx >= len(conds) || baseR.Right <= baseR.Left {
-			continue
+	return
+	/*
+		if app.scenarioBackRect.Right > app.scenarioBackRect.Left {
+			drawButton(hdc, app.scenarioBackRect, "← Назад", false)
 		}
-		dy := scenarioDragOffset(1, dataIdx)
-		r := offsetRectXY(baseR, 0, dy)
-		dragR := offsetRectXY(app.conditionDragRects[i], 0, dy)
-		logicR := offsetRectXY(app.conditionLogicRects[i], 0, dy)
-		delR := offsetRectXY(app.conditionDeleteRects[i], 0, dy)
-		dupR := offsetRectXY(app.conditionDuplicateRects[i], 0, dy)
-		cnd := conds[dataIdx]
-		depth := scenarioConditionDepth(conds, dataIdx)
-		for level := 0; level < depth; level++ {
-			branchX := app.scenarioListClip.Left + 7 + int32(level*12)
-			branchColor := blendColor(theme.border, theme.accent2, .48)
-			d2dDrawLine(float32(branchX), float32(r.Top-4), float32(branchX), float32(r.Bottom), 1.1, branchColor)
-			d2dDrawLine(float32(branchX), float32((r.Top+r.Bottom)/2), float32(r.Left+4), float32((r.Top+r.Bottom)/2), 1.1, branchColor)
+		if !app.scenarioSavedDraft && undoAvailable040() {
+			drawButton(hdc, app.undoRect, "↶", false)
+		} else {
+			drawDisabledButton(hdc, app.undoRect, "↶")
 		}
+		if !app.scenarioSavedDraft && redoAvailable040() {
+			drawButton(hdc, app.redoRect, "↷", false)
+		} else {
+			drawDisabledButton(hdc, app.redoRect, "↷")
+		}
+		drawButton(hdc, app.previewRect, "Просмотр", false)
+		titleX := int(app.redoRect.Right) + 16
+		if titleX < int(body.Left)+18 {
+			titleX = int(body.Left) + 18
+		}
+		titleW := int(app.previewRect.Left) - titleX - 14
+		// Never force the heading wider than the actual free space. The previous
+		// 160px minimum made it paint under the trigger-logic button on narrow windows.
+		if titleW >= 72 {
+			drawText(hdc, "Схема задачи", titleX, int(body.Top)+18, titleW, 28, 18, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		}
+
+		if app.scenarioSavedDraft && app.section == 13 {
+			drawText(hdc, "Название", int(app.savedScenarioNameRect.Left), int(app.savedScenarioNameRect.Top)-18, int(app.savedScenarioNameRect.Right-app.savedScenarioNameRect.Left), 16, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+			roundFill(hdc, app.savedScenarioNameRect, surfaceButtonColor(), 9)
+			drawButton(hdc, app.savedScenarioSaveRect, "Сохранить", true)
+			drawButton(hdc, app.savedScenarioCancelRect, "Отмена", false)
+			drawButton(hdc, app.savedScenarioCheckRect, "Проверка", false)
+		}
+
+		// Primary trigger node.
+		r := app.blockWhenRect
 		rv, hv := hoverCardRect(r)
-		cc := surfaceButtonColor()
-		if cnd.Type == condGroup {
-			cc = blendColor(cc, theme.accent, .18)
-		}
+		c := blendColor(surfaceButtonColor(), theme.accent, .16)
 		if hv > 0 {
-			cc = blendColor(cc, theme.accent2, .06*hv)
+			c = blendColor(c, theme.accent2, .08*hv)
 		}
-		roundFill(hdc, rv, cc, 10)
-		if app.draggingScenarioKind == 1 && app.draggingScenarioIntoGroup && app.draggingScenarioTarget == dataIdx && ui2d.active {
-			d2dDrawRoundedOutline(rv, 10, 2, theme.accent2)
+		roundFill(hdc, rv, c, 13)
+		if hv > 0 && ui2d.active {
+			d2dDrawRoundedOutline(rv, 13, float32(1+.35*hv), blendColor(theme.border, theme.accent2, .44))
 		}
-		if cnd.Type == condGroup {
-			arrow := "▾"
-			if app.conditionGroupCollapsed[cnd.ID] {
-				arrow = "▸"
+		drawText(hdc, "КОГДА", int(r.Left)+14, int(r.Top)+6, int(r.Right-r.Left)-28, 14, 9, 700, theme.accent2, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, currentScenarioWhenSummary(), int(r.Left)+14, int(r.Top)+21, int(r.Right-r.Left)-28, 24, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+
+		innerLeft := int(body.Left) + 18
+		innerW := int(body.Right-body.Left) - 36
+		colGap := 18
+		colW := (innerW - colGap) / 2
+		rightX := innerLeft + colW + colGap
+		listTitleY := int(app.blockWhenRect.Bottom) + 12
+		// Connector from trigger into both branches.
+		midX := (app.blockWhenRect.Left + app.blockWhenRect.Right) / 2
+		roundFill(hdc, RECT{midX - 1, app.blockWhenRect.Bottom, midX + 1, int32(listTitleY - 3)}, blendColor(theme.border, theme.accent2, .40), 1)
+		drawText(hdc, "↓", int(midX)-10, listTitleY-11, 20, 18, 12, 650, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "УСЛОВИЯ", innerLeft, listTitleY, colW, 18, 10, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "ДЕЙСТВИЯ", rightX, listTitleY, colW, 18, 10, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+
+		conds := currentScenarioConditions()
+		steps := currentScenarioSteps()
+		if ui2d.active && app.scenarioListClip.Right > app.scenarioListClip.Left {
+			d2dPushClip(app.scenarioListClip)
+		}
+		for i, baseR := range app.conditionRows {
+			dataIdx := app.conditionRowIndices[i]
+			if dataIdx < 0 || dataIdx >= len(conds) || baseR.Right <= baseR.Left {
+				continue
 			}
-			collapseR := offsetRectXY(app.conditionCollapseRects[i], 0, dy)
-			drawText(hdc, arrow, int(collapseR.Left), int(collapseR.Top), int(collapseR.Right-collapseR.Left), int(collapseR.Bottom-collapseR.Top), 13, 700, theme.accent2, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-		}
-		drawText(hdc, "≡", int(dragR.Left), int(dragR.Top), int(dragR.Right-dragR.Left), int(dragR.Bottom-dragR.Top), 14, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-		textX := int(r.Left) + 38
-		if dataIdx > 0 {
-			logic := "И"
-			if cnd.Logic == logicOR {
-				logic = "ИЛИ"
+			dy := scenarioDragOffset(1, dataIdx)
+			r := offsetRectXY(baseR, 0, dy)
+			dragR := offsetRectXY(app.conditionDragRects[i], 0, dy)
+			logicR := offsetRectXY(app.conditionLogicRects[i], 0, dy)
+			delR := offsetRectXY(app.conditionDeleteRects[i], 0, dy)
+			dupR := offsetRectXY(app.conditionDuplicateRects[i], 0, dy)
+			cnd := conds[dataIdx]
+			depth := scenarioConditionDepth(conds, dataIdx)
+			for level := 0; level < depth; level++ {
+				branchX := app.scenarioListClip.Left + 7 + int32(level*12)
+				branchColor := blendColor(theme.border, theme.accent2, .48)
+				d2dDrawLine(float32(branchX), float32(r.Top-4), float32(branchX), float32(r.Bottom), 1.1, branchColor)
+				d2dDrawLine(float32(branchX), float32((r.Top+r.Bottom)/2), float32(r.Left+4), float32((r.Top+r.Bottom)/2), 1.1, branchColor)
 			}
-			drawOutlinedButton(hdc, logicR, logic, theme.accent2)
-			textX = int(logicR.Right) + 6
+			rv, hv := hoverCardRect(r)
+			cc := surfaceButtonColor()
+			if cnd.Type == condGroup {
+				cc = blendColor(cc, theme.accent, .18)
+			}
+			if hv > 0 {
+				cc = blendColor(cc, theme.accent2, .06*hv)
+			}
+			roundFill(hdc, rv, cc, 10)
+			if app.draggingScenarioKind == 1 && app.draggingScenarioIntoGroup && app.draggingScenarioTarget == dataIdx && ui2d.active {
+				d2dDrawRoundedOutline(rv, 10, 2, theme.accent2)
+			}
+			if cnd.Type == condGroup {
+				arrow := "▾"
+				if app.conditionGroupCollapsed[cnd.ID] {
+					arrow = "▸"
+				}
+				collapseR := offsetRectXY(app.conditionCollapseRects[i], 0, dy)
+				drawText(hdc, arrow, int(collapseR.Left), int(collapseR.Top), int(collapseR.Right-collapseR.Left), int(collapseR.Bottom-collapseR.Top), 13, 700, theme.accent2, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+			}
+			drawText(hdc, "≡", int(dragR.Left), int(dragR.Top), int(dragR.Right-dragR.Left), int(dragR.Bottom-dragR.Top), 14, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+			textX := int(r.Left) + 38
+			if dataIdx > 0 {
+				logic := "И"
+				if cnd.Logic == logicOR {
+					logic = "ИЛИ"
+				}
+				drawOutlinedButton(hdc, logicR, logic, theme.accent2)
+				textX = int(logicR.Right) + 6
+			}
+			label := conditionSummary(cnd)
+			if cnd.Type == condGroup {
+				label = fmt.Sprintf("Составное условие · %d", scenarioGroupDescendantCount(conds, cnd.ID))
+			}
+			drawText(hdc, label, textX, int(r.Top), int(r.Right)-textX-66, int(r.Bottom-r.Top), 10, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+			drawScenarioIconButton(hdc, dupR, scenarioIconCopy)
+			drawScenarioIconButton(hdc, delR, scenarioIconDelete)
+			if i+1 < len(app.conditionRows) && app.conditionRowIndices[i+1] == dataIdx+1 && app.conditionRows[i+1].Right > app.conditionRows[i+1].Left {
+				nextIdx := app.conditionRowIndices[i+1]
+				nextR := offsetRectXY(app.conditionRows[i+1], 0, scenarioDragOffset(1, nextIdx))
+				cx := (r.Left + r.Right) / 2
+				roundFill(hdc, RECT{cx - 1, r.Bottom, cx + 1, nextR.Top}, blendColor(theme.border, theme.accent2, .35), 1)
+			}
 		}
-		label := conditionSummary(cnd)
-		if cnd.Type == condGroup {
-			label = fmt.Sprintf("Составное условие · %d", scenarioGroupDescendantCount(conds, cnd.ID))
+		for i, baseR := range app.stepRows {
+			dataIdx := app.stepRowIndices[i]
+			if dataIdx < 0 || dataIdx >= len(steps) || baseR.Right <= baseR.Left {
+				continue
+			}
+			dy := scenarioDragOffset(2, dataIdx)
+			r := offsetRectXY(baseR, 0, dy)
+			dragR := offsetRectXY(app.stepDragRects[i], 0, dy)
+			delR := offsetRectXY(app.stepDeleteRects[i], 0, dy)
+			dupR := offsetRectXY(app.stepDuplicateRects[i], 0, dy)
+			st := steps[dataIdx]
+			rv, hv := hoverCardRect(r)
+			cc := surfaceButtonColor()
+			if hv > 0 {
+				cc = blendColor(cc, theme.accent2, .06*hv)
+			}
+			roundFill(hdc, rv, cc, 10)
+			drawText(hdc, "≡", int(dragR.Left), int(dragR.Top), int(dragR.Right-dragR.Left), int(dragR.Bottom-dragR.Top), 15, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+			drawText(hdc, stepSummary(st), int(r.Left)+38, int(r.Top), int(r.Right-r.Left)-100, int(r.Bottom-r.Top), 10, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+			drawScenarioIconButton(hdc, dupR, scenarioIconCopy)
+			drawScenarioIconButton(hdc, delR, scenarioIconDelete)
+			if i+1 < len(app.stepRows) && app.stepRowIndices[i+1] == dataIdx+1 && app.stepRows[i+1].Right > app.stepRows[i+1].Left {
+				nextIdx := app.stepRowIndices[i+1]
+				nextR := offsetRectXY(app.stepRows[i+1], 0, scenarioDragOffset(2, nextIdx))
+				cx := (r.Left + r.Right) / 2
+				roundFill(hdc, RECT{cx - 1, r.Bottom, cx + 1, nextR.Top}, blendColor(theme.border, theme.accent2, .35), 1)
+			}
 		}
-		drawText(hdc, label, textX, int(r.Top), int(r.Right)-textX-66, int(r.Bottom-r.Top), 10, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		drawScenarioIconButton(hdc, dupR, scenarioIconCopy)
-		drawScenarioIconButton(hdc, delR, scenarioIconDelete)
-		if i+1 < len(app.conditionRows) && app.conditionRowIndices[i+1] == dataIdx+1 && app.conditionRows[i+1].Right > app.conditionRows[i+1].Left {
-			nextIdx := app.conditionRowIndices[i+1]
-			nextR := offsetRectXY(app.conditionRows[i+1], 0, scenarioDragOffset(1, nextIdx))
-			cx := (r.Left + r.Right) / 2
-			roundFill(hdc, RECT{cx - 1, r.Bottom, cx + 1, nextR.Top}, blendColor(theme.border, theme.accent2, .35), 1)
+		if ui2d.active && app.scenarioListClip.Right > app.scenarioListClip.Left {
+			d2dPopClip()
 		}
-	}
-	for i, baseR := range app.stepRows {
-		dataIdx := app.stepRowIndices[i]
-		if dataIdx < 0 || dataIdx >= len(steps) || baseR.Right <= baseR.Left {
-			continue
-		}
-		dy := scenarioDragOffset(2, dataIdx)
-		r := offsetRectXY(baseR, 0, dy)
-		dragR := offsetRectXY(app.stepDragRects[i], 0, dy)
-		delR := offsetRectXY(app.stepDeleteRects[i], 0, dy)
-		dupR := offsetRectXY(app.stepDuplicateRects[i], 0, dy)
-		st := steps[dataIdx]
-		rv, hv := hoverCardRect(r)
-		cc := surfaceButtonColor()
+		drawScrollBar(hdc, app.scenarioScrollTrack, app.scenarioScrollThumb)
+		drawButton(hdc, app.addConditionRect, "+ Условие", false)
+		drawButton(hdc, app.addConditionGroupRect, "Составное условие", false)
+		drawScenarioIconButton(hdc, app.pasteConditionRect, scenarioIconPaste)
+		drawScenarioIconButton(hdc, app.copyConditionsGroupRect, scenarioIconPasteAll)
+		drawButton(hdc, app.addStepRect, "+ Шаг", false)
+		drawScenarioIconButton(hdc, app.pasteStepRect, scenarioIconPaste)
+		drawScenarioIconButton(hdc, app.copyStepsGroupRect, scenarioIconPasteAll)
+
+		// Both branches converge into the final power action.
+		fr := app.blockActionRect
+		rv, hv = hoverCardRect(fr)
+		fc := blendColor(surfaceButtonColor(), theme.accent, .16)
 		if hv > 0 {
-			cc = blendColor(cc, theme.accent2, .06*hv)
+			fc = blendColor(fc, theme.accent2, .08*hv)
 		}
-		roundFill(hdc, rv, cc, 10)
-		drawText(hdc, "≡", int(dragR.Left), int(dragR.Top), int(dragR.Right-dragR.Left), int(dragR.Bottom-dragR.Top), 15, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-		drawText(hdc, stepSummary(st), int(r.Left)+38, int(r.Top), int(r.Right-r.Left)-100, int(r.Bottom-r.Top), 10, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		drawScenarioIconButton(hdc, dupR, scenarioIconCopy)
-		drawScenarioIconButton(hdc, delR, scenarioIconDelete)
-		if i+1 < len(app.stepRows) && app.stepRowIndices[i+1] == dataIdx+1 && app.stepRows[i+1].Right > app.stepRows[i+1].Left {
-			nextIdx := app.stepRowIndices[i+1]
-			nextR := offsetRectXY(app.stepRows[i+1], 0, scenarioDragOffset(2, nextIdx))
-			cx := (r.Left + r.Right) / 2
-			roundFill(hdc, RECT{cx - 1, r.Bottom, cx + 1, nextR.Top}, blendColor(theme.border, theme.accent2, .35), 1)
-		}
-	}
-	if ui2d.active && app.scenarioListClip.Right > app.scenarioListClip.Left {
-		d2dPopClip()
-	}
-	drawScrollBar(hdc, app.scenarioScrollTrack, app.scenarioScrollThumb)
-	drawButton(hdc, app.addConditionRect, "+ Условие", false)
-	drawButton(hdc, app.addConditionGroupRect, "Составное условие", false)
-	drawScenarioIconButton(hdc, app.pasteConditionRect, scenarioIconPaste)
-	drawScenarioIconButton(hdc, app.copyConditionsGroupRect, scenarioIconPasteAll)
-	drawButton(hdc, app.addStepRect, "+ Шаг", false)
-	drawScenarioIconButton(hdc, app.pasteStepRect, scenarioIconPaste)
-	drawScenarioIconButton(hdc, app.copyStepsGroupRect, scenarioIconPasteAll)
+		roundFill(hdc, rv, fc, 13)
+		drawText(hdc, "ФИНАЛЬНОЕ ДЕЙСТВИЕ", int(fr.Left)+12, int(fr.Top)+5, int(fr.Right-fr.Left)-24, 13, 8, 700, theme.accent2, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, currentScenarioActionSummary(), int(fr.Left)+12, int(fr.Top)+19, int(fr.Right-fr.Left)-24, 22, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 
-	// Both branches converge into the final power action.
-	fr := app.blockActionRect
-	rv, hv = hoverCardRect(fr)
-	fc := blendColor(surfaceButtonColor(), theme.accent, .16)
-	if hv > 0 {
-		fc = blendColor(fc, theme.accent2, .08*hv)
-	}
-	roundFill(hdc, rv, fc, 13)
-	drawText(hdc, "ФИНАЛЬНОЕ ДЕЙСТВИЕ", int(fr.Left)+12, int(fr.Top)+5, int(fr.Right-fr.Left)-24, 13, 8, 700, theme.accent2, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc, currentScenarioActionSummary(), int(fr.Left)+12, int(fr.Top)+19, int(fr.Right-fr.Left)-24, 22, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-
-	if app.draggingScenarioKind != 0 && ui2d.active {
-		var base RECT
-		if app.draggingScenarioKind == 1 {
-			for slot, idx := range app.conditionRowIndices {
-				if idx == app.draggingScenarioIndex {
-					base = app.conditionRows[slot]
-					break
+		if app.draggingScenarioKind != 0 && ui2d.active {
+			var base RECT
+			if app.draggingScenarioKind == 1 {
+				for slot, idx := range app.conditionRowIndices {
+					if idx == app.draggingScenarioIndex {
+						base = app.conditionRows[slot]
+						break
+					}
+				}
+			} else if app.draggingScenarioKind == 2 {
+				for slot, idx := range app.stepRowIndices {
+					if idx == app.draggingScenarioIndex {
+						base = app.stepRows[slot]
+						break
+					}
 				}
 			}
-		} else if app.draggingScenarioKind == 2 {
-			for slot, idx := range app.stepRowIndices {
-				if idx == app.draggingScenarioIndex {
-					base = app.stepRows[slot]
-					break
+			if base.Right > base.Left {
+				if app.draggingScenarioKind == 1 && app.draggingScenarioParentID == "" {
+					x := app.scenarioListClip.Left + 3
+					d2dDrawLine(float32(x), float32(app.scenarioListClip.Top+4), float32(x), float32(app.scenarioListClip.Bottom-4), 2, theme.accent2)
 				}
+				hh := (base.Bottom - base.Top) / 2
+				cy := app.draggingScenarioY
+				ghost := RECT{base.Left, cy - hh, base.Right, cy + hh}
+				roundFill(hdc, ghost, blendColor(surfaceButtonColor(), theme.accent, .34), 10)
+				d2dDrawRoundedOutline(ghost, 10, 1.6, theme.accent2)
 			}
 		}
-		if base.Right > base.Left {
-			if app.draggingScenarioKind == 1 && app.draggingScenarioParentID == "" {
-				x := app.scenarioListClip.Left + 3
-				d2dDrawLine(float32(x), float32(app.scenarioListClip.Top+4), float32(x), float32(app.scenarioListClip.Bottom-4), 2, theme.accent2)
-			}
-			hh := (base.Bottom - base.Top) / 2
-			cy := app.draggingScenarioY
-			ghost := RECT{base.Left, cy - hh, base.Right, cy + hh}
-			roundFill(hdc, ghost, blendColor(surfaceButtonColor(), theme.accent, .34), 10)
-			d2dDrawRoundedOutline(ghost, 10, 1.6, theme.accent2)
-		}
-	}
-	drawScenarioTooltip(hdc, body)
+		drawScenarioTooltip(hdc, body)
+	*/
 	if app.confirmDiscardScenario {
 		drawScenarioDiscardConfirm(hdc, body)
 	}
@@ -6556,6 +6617,9 @@ func animate() {
 
 func onMouseMove(hwnd uintptr, x, y int32) {
 	app.mouseX, app.mouseY = x, y
+	if handleScenarioGraphMouseMove(x, y) {
+		return
+	}
 	tooltipRect, tooltipText := scenarioTooltipAt(x, y)
 	if tooltipRect != app.tooltipRect || tooltipText != app.tooltipText {
 		app.tooltipRect = tooltipRect
@@ -8227,6 +8291,10 @@ func onClick(x, y int32) {
 					app.settings.Action = i
 					saveSettings()
 				}
+				if n := selectedGraphNode(); n != nil && n.Kind == graphNodeFinish {
+					n.Action = i
+					persistCurrentScenarioGraph()
+				}
 				playUI(successSound)
 				if app.scenarioSavedDraft {
 					app.section = 13
@@ -8243,6 +8311,7 @@ func onClick(x, y int32) {
 	if app.section == 15 {
 		if pointIn(app.blockEditorBackRect, x, y) || pointIn(app.blockEditorDoneRect, x, y) {
 			syncScenarioWhenFields()
+			syncCurrentGraphFromLegacy()
 			if app.scenarioSavedDraft {
 				app.section = 13
 			} else {
@@ -8324,6 +8393,9 @@ func onClick(x, y int32) {
 	}
 
 	if app.section == 7 || app.section == 13 {
+		if handleScenarioGraphClick(x, y) {
+			return
+		}
 		if app.confirmDiscardScenario {
 			if pointIn(app.confirmDiscardYesRect, x, y) {
 				closeSavedScenarioEditor()
@@ -8372,7 +8444,8 @@ func onClick(x, y int32) {
 			return
 		}
 		if pointIn(app.previewRect, x, y) {
-			app.section = 17
+			app.checkReturnSection = app.section
+			app.section = 12
 			playUI(openSound)
 			startPageAnimation()
 			updateInputVisibility()
@@ -9395,6 +9468,10 @@ func savedTaskSummary(t SavedTask) string {
 
 func saveCurrentTask() {
 	syncFields()
+	if app.settings.TaskKind == 1 {
+		syncCurrentGraphFromLegacy()
+		syncLegacyFromCurrentGraph()
+	}
 	if !validateTaskDialog040(captureTaskState(), true) {
 		return
 	}
@@ -9421,6 +9498,7 @@ func saveCurrentTask() {
 		CloseBefore: closeBefore, Processes: processes, WarningSeconds: app.settings.WarningSeconds,
 		Conditions: conds, TriggerLogic: app.settings.TriggerLogic,
 		Steps: steps, Recurrence: app.settings.Recurrence, TaskKind: app.settings.TaskKind,
+		Graph: cloneScenarioGraph(app.settings.ScenarioGraph),
 	}
 	app.settings.SavedTasks = append(app.settings.SavedTasks, t)
 	saveSettings()
@@ -9455,6 +9533,7 @@ func loadSavedTask(t SavedTask) {
 	app.settings.TriggerLogic = t.TriggerLogic
 	app.settings.ActionSteps = cloneActionSteps(t.Steps)
 	app.settings.Recurrence = t.Recurrence
+	app.settings.ScenarioGraph = ensureScenarioGraph(cloneScenarioGraph(t.Graph), taskStateFromSaved040(t))
 	app.settings.TaskKind = t.TaskKind
 	pSetWindowTextW.Call(app.edits[idDelayHours], uintptr(unsafe.Pointer(wstr(strconv.Itoa(t.DelayHours)))))
 	pSetWindowTextW.Call(app.edits[idDelayMinutes], uintptr(unsafe.Pointer(wstr(strconv.Itoa(t.DelayMinutes)))))
@@ -9476,6 +9555,8 @@ func loadSavedTask(t SavedTask) {
 		app.modeAnim[app.selectedMode] = 1
 	}
 	if t.TaskKind == 1 {
+		app.graphSelectedNodeID = ""
+		app.graphConnectingNodeID, app.graphConnectingPort = "", ""
 		app.section = 7
 		app.lastTaskSection = 2
 	} else {
@@ -9506,6 +9587,16 @@ func startOrStopSavedTask(idx int) {
 	now := time.Now()
 	conds := append([]AutomationCondition(nil), t.Conditions...)
 	steps := cloneActionSteps(t.Steps)
+	graph := ScenarioGraph{}
+	if t.TaskKind == 1 {
+		graph = ensureScenarioGraph(cloneScenarioGraph(t.Graph), taskStateFromSaved040(t))
+		if reason := scenarioGraphValidationError(graph); reason != "" {
+			message("Ошибка схемы", reason, MB_OK|MB_ICONERROR)
+			return
+		}
+		conds = nil
+		steps = nil
+	}
 	closeBefore := false
 	processes := []string(nil)
 	if t.TaskKind == 0 {
@@ -9516,7 +9607,7 @@ func startOrStopSavedTask(idx int) {
 	}
 	s := Schedule{active: true, action: t.Action, mode: t.Mode, started: now, sourceTaskID: t.ID, sourceTaskName: t.Name, runID: newRunID(),
 		conditions: conds, triggerLogic: t.TriggerLogic,
-		steps: steps, closeBefore: closeBefore, processes: processes, warningSeconds: t.WarningSeconds}
+		steps: steps, closeBefore: closeBefore, processes: processes, warningSeconds: t.WarningSeconds, graph: graph}
 	switch t.Mode {
 	case 0:
 		d := time.Duration(t.DelayHours)*time.Hour + time.Duration(t.DelayMinutes)*time.Minute + time.Duration(t.DelaySeconds)*time.Second
@@ -9557,7 +9648,7 @@ func startOrStopSavedTask(idx int) {
 		s.target = tm
 		s.total = tm.Sub(now)
 	case 5:
-		if t.TaskKind != 1 || len(conds) == 0 {
+		if t.TaskKind != 1 || (len(graph.Nodes) == 0 && len(conds) == 0) {
 			message("Ошибка", "В сохранённой продвинутой задаче нет условий.", MB_OK|MB_ICONERROR)
 			return
 		}
@@ -9582,6 +9673,7 @@ func openSavedTaskEditor(idx int) {
 	app.savedEditDraft.Processes = append([]string(nil), app.settings.SavedTasks[idx].Processes...)
 	app.savedEditDraft.Conditions = append([]AutomationCondition(nil), app.settings.SavedTasks[idx].Conditions...)
 	app.savedEditDraft.Steps = cloneActionSteps(app.settings.SavedTasks[idx].Steps)
+	app.savedEditDraft.Graph = ensureScenarioGraph(cloneScenarioGraph(app.settings.SavedTasks[idx].Graph), taskStateFromSaved040(app.settings.SavedTasks[idx]))
 	pSetWindowTextW.Call(app.edits[idTaskName], uintptr(unsafe.Pointer(wstr(app.savedEditDraft.Name))))
 	pSetWindowTextW.Call(app.edits[idDelayHours], uintptr(unsafe.Pointer(wstr(strconv.Itoa(app.savedEditDraft.DelayHours)))))
 	pSetWindowTextW.Call(app.edits[idDelayMinutes], uintptr(unsafe.Pointer(wstr(strconv.Itoa(app.savedEditDraft.DelayMinutes)))))
@@ -9610,6 +9702,10 @@ func saveSavedTaskEditor() {
 	idx := app.editingSavedIdx
 	if idx < 0 || idx >= len(app.settings.SavedTasks) {
 		return
+	}
+	if app.scenarioSavedDraft && app.savedEditDraft.TaskKind == 1 {
+		syncCurrentGraphFromLegacy()
+		syncLegacyFromCurrentGraph()
 	}
 	t := app.savedEditDraft
 	t.Name = strings.TrimSpace(getText(app.edits[idTaskName]))
@@ -9693,6 +9789,7 @@ func duplicateSavedTask(idx int) {
 	for i := range cp.Steps {
 		cp.Steps[i].ID = newAutomationID("step")
 	}
+	cp.Graph = cloneScenarioGraph(src.Graph)
 	cp.LastRunKey = ""
 	// A recurring copy starts paused so duplicating a task cannot silently create
 	// a second automatic run at the same time as the original.
@@ -10002,6 +10099,16 @@ func startSchedule() {
 		return
 	}
 	syncFields()
+	graph := ScenarioGraph{}
+	if app.settings.TaskKind == 1 {
+		syncCurrentGraphFromLegacy()
+		state := syncLegacyFromCurrentGraph()
+		graph = ensureScenarioGraph(cloneScenarioGraph(state.Graph), state)
+		if reason := scenarioGraphValidationError(graph); reason != "" {
+			message("Ошибка схемы", reason, MB_OK|MB_ICONERROR)
+			return
+		}
+	}
 	now := time.Now()
 	conds := append([]AutomationCondition(nil), app.settings.AdvancedConditions...)
 	steps := cloneActionSteps(app.settings.ActionSteps)
@@ -10013,9 +10120,13 @@ func startSchedule() {
 		closeBefore = app.settings.CloseBefore
 		processes = append([]string(nil), app.settings.Processes...)
 	}
+	if len(graph.Nodes) > 0 {
+		conds = nil
+		steps = nil
+	}
 	s := Schedule{active: true, action: app.selectedAction, mode: app.selectedMode, started: now, runID: newRunID(),
 		conditions: conds, triggerLogic: app.settings.TriggerLogic,
-		steps: steps, closeBefore: closeBefore, processes: processes, warningSeconds: app.settings.WarningSeconds}
+		steps: steps, closeBefore: closeBefore, processes: processes, warningSeconds: app.settings.WarningSeconds, graph: graph}
 	switch app.selectedMode {
 	case 0:
 		d := time.Duration(app.settings.DelayHours)*time.Hour + time.Duration(app.settings.DelayMinutes)*time.Minute + time.Duration(app.settings.DelaySeconds)*time.Second
@@ -10066,7 +10177,7 @@ func startSchedule() {
 		s.target = t
 		s.total = t.Sub(now)
 	case 5:
-		if app.settings.TaskKind != 1 || len(conds) == 0 {
+		if app.settings.TaskKind != 1 || (len(graph.Nodes) == 0 && len(conds) == 0) {
 			message("Ошибка", "Для запуска по условиям добавьте хотя бы одно условие в продвинутой задаче.", MB_OK|MB_ICONERROR)
 			return
 		}
@@ -10188,7 +10299,9 @@ func tick() {
 		appendRunHistory("CONDITIONS_OK", "Дополнительные условия выполнены", app.schedule.runID)
 	}
 	ready := baseReady
-	if app.schedule.mode == 5 {
+	if app.schedule.mode == 5 && len(app.schedule.graph.Nodes) > 0 {
+		ready = baseReady
+	} else if app.schedule.mode == 5 {
 		// «По условиям» has no independent base trigger. The condition tree itself is the trigger.
 		ready = len(app.schedule.conditions) > 0 && condReady
 	} else if len(app.schedule.conditions) > 0 {
@@ -10235,7 +10348,14 @@ func executeActionAsync(s Schedule) {
 	execVisualStart040()
 	invalidate(app.hwnd)
 	go func() {
-		if !executeScenarioSteps(s) {
+		finalAction := s.action
+		ok := false
+		if len(s.graph.Nodes) > 0 {
+			finalAction, ok = executeScenarioGraph(s)
+		} else {
+			ok = executeScenarioSteps(s)
+		}
+		if !ok {
 			execVisualFinal040("error")
 			app.mu.Lock()
 			app.status = "Сценарий остановлен из-за ошибки"
@@ -10250,15 +10370,15 @@ func executeActionAsync(s Schedule) {
 			invalidate(app.hwnd)
 			return
 		}
-		appendRunHistory("EXECUTE", fmt.Sprintf("action=%d task=%s", s.action, s.sourceTaskName), s.runID)
-		showNotification("PowerPilot", "Выполняется: "+powerActionName(s.action))
+		appendRunHistory("EXECUTE", fmt.Sprintf("action=%d task=%s", finalAction, s.sourceTaskName), s.runID)
+		showNotification("PowerPilot", "Выполняется: "+powerActionName(finalAction))
 		taskName := strings.TrimSpace(s.sourceTaskName)
 		if taskName == "" {
-			taskName = powerActionName(s.action)
+			taskName = powerActionName(finalAction)
 		}
-		pushAppNotification(notifSuccess, "Задача выполнена", taskName+" · "+powerActionName(s.action), notifTargetHistory)
+		pushAppNotification(notifSuccess, "Задача выполнена", taskName+" · "+powerActionName(finalAction), notifTargetHistory)
 		time.Sleep(180 * time.Millisecond)
-		switch s.action {
+		switch finalAction {
 		case 0:
 			_ = exec.Command("shutdown.exe", "/s", "/t", "0").Start()
 		case 1:
@@ -10272,7 +10392,7 @@ func executeActionAsync(s Schedule) {
 		}
 		execVisualFinal040("ok")
 		app.mu.Lock()
-		if s.action == 4 {
+		if finalAction == 4 {
 			app.status = "Задача завершена"
 		} else {
 			app.status = "Действие отправлено Windows"
