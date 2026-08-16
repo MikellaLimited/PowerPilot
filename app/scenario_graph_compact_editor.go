@@ -320,6 +320,16 @@ func prepareGraphFullEditorLayout(body RECT) (RECT, int) {
 	app.graphEditorRect = RECT{int32(x), int32(y), int32(x + panelW), int32(y + panelH)}
 	app.graphEditorLegacyBody = legacy
 	app.graphEditorDX, app.graphEditorDY = int32(x)-legacy.Left, int32(y)-legacy.Top
+	// The legacy EDIT controls are shared with the main window. They may already
+	// be children of the detached graph window from the previous paint. Always
+	// return them to the coordinate space layoutControls expects before laying
+	// them out again; otherwise every repaint adds graphEditorDX/DY once more and
+	// the fields gradually drift over unrelated controls.
+	for _, id := range graphFullEditorInputIDs(app.graphEditorSection) {
+		if h := app.edits[id]; h != 0 {
+			pSetParentGraphEditor.Call(h, app.hwnd)
+		}
+	}
 	oldSection := app.section
 	app.section = app.graphEditorSection
 	layoutControls(app.hwnd)
@@ -347,7 +357,7 @@ func positionGraphFullEditorInputs() {
 		}
 		pSetParentGraphEditor.Call(h, app.graphWindow)
 		dx, dy := scaledInt040(int(app.graphEditorDX)), scaledInt040(int(app.graphEditorDY))
-		pMoveWindow.Call(h, uintptr(int(pt.X)+dx), uintptr(int(pt.Y)+dy-scaledInt040(2)), uintptr(wr.Right-wr.Left), uintptr(wr.Bottom-wr.Top), 1)
+		pMoveWindow.Call(h, uintptr(int(pt.X)+dx), uintptr(int(pt.Y)+dy), uintptr(wr.Right-wr.Left), uintptr(wr.Bottom-wr.Top), 1)
 		if visible != 0 {
 			pShowWindow.Call(h, SW_SHOW)
 		} else {
@@ -412,6 +422,7 @@ func handleGraphFullEditorClick(x, y int32) bool {
 		return true
 	}
 	localX, localY := x-app.graphEditorDX, y-app.graphEditorDY
+	openConditions := app.graphEditorSection == 15 && pointIn(app.modeRects[5], localX, localY)
 	graphSection := app.section
 	app.section = app.graphEditorSection
 	onClick(localX, localY)
@@ -422,6 +433,35 @@ func handleGraphFullEditorClick(x, y int32) bool {
 		closeGraphFullEditor()
 	} else if resultSection == 4 || resultSection == 8 || resultSection == 9 || resultSection == 14 || resultSection == 15 {
 		app.graphEditorSection = resultSection
+	}
+	if openConditions {
+		// In the block editor "По условиям" is an entry point, not a dead-end
+		// trigger option: keep the selected trigger mode and immediately reveal the
+		// condition block editor. Reuse an existing block or create the first one.
+		syncScenarioWhenFields()
+		syncCurrentGraphFromLegacy()
+		g := ensureCurrentScenarioGraph()
+		var condition *ScenarioGraphNode
+		for i := range g.Nodes {
+			if g.Nodes[i].Kind == graphNodeCondition {
+				condition = &g.Nodes[i]
+				break
+			}
+		}
+		if condition == nil && len(g.Nodes) < 64 {
+			trigger := g.trigger()
+			x, y := 320.0, 180.0
+			if trigger != nil {
+				x, y = trigger.X+300, trigger.Y
+			}
+			n := newScenarioGraphNode(graphNodeCondition, x, y)
+			g.Nodes = append(g.Nodes, n)
+			condition = &g.Nodes[len(g.Nodes)-1]
+		}
+		if condition != nil {
+			persistCurrentScenarioGraph()
+			openGraphCompactEditor(condition.ID, 0)
+		}
 	}
 	invalidateScenarioGraphWindows()
 	return true

@@ -13,7 +13,21 @@ var (
 	pSetForegroundWindowGraph  = user32.NewProc("SetForegroundWindow")
 	pSetBkColorGraph           = gdi32.NewProc("SetBkColor")
 	scenarioGraphDetachedInput bool
+	graphEditBrush             uintptr
+	graphEditBrushColor        uint32
 )
+
+func scenarioGraphEditBrush() uintptr {
+	color := surfaceButtonColor()
+	if graphEditBrush == 0 || graphEditBrushColor != color {
+		if graphEditBrush != 0 {
+			pDeleteObject.Call(graphEditBrush)
+		}
+		graphEditBrush = solid(color)
+		graphEditBrushColor = color
+	}
+	return graphEditBrush
+}
 
 func openScenarioGraphWindow() {
 	if app.graphWindow != 0 {
@@ -217,7 +231,7 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 		pSetBkMode.Call(wParam, 2)
 		pSetBkColorGraph.Call(wParam, uintptr(surfaceButtonColor()))
 		pSetTextColor.Call(wParam, uintptr(theme.text))
-		return controlBrush
+		return scenarioGraphEditBrush()
 	case WM_COMMAND:
 		onCommand(loword(wParam), hiword(wParam), lParam)
 		pInvalidateRect.Call(hwnd, 0, 0)
@@ -314,6 +328,10 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 		return 0
 	case WM_DESTROY:
 		if app.graphWindow == hwnd {
+			if graphEditBrush != 0 {
+				pDeleteObject.Call(graphEditBrush)
+				graphEditBrush, graphEditBrushColor = 0, 0
+			}
 			app.graphEditorText = 0
 			app.graphEditorOpen = false
 			app.graphWindow = 0
