@@ -4,12 +4,19 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unsafe"
 )
 
+var (
+	pSetParentGraphEditor = user32.NewProc("SetParent")
+	pGetParentGraphEditor = user32.NewProc("GetParent")
+)
+
 func openGraphCompactEditor(nodeID string, item int) {
-	if ensureCurrentScenarioGraph().node(nodeID) == nil {
+	node := ensureCurrentScenarioGraph().node(nodeID)
+	if node == nil {
 		return
 	}
 	selectOnlyGraphNode(nodeID)
@@ -17,9 +24,57 @@ func openGraphCompactEditor(nodeID string, item int) {
 	app.graphEditorNodeID = nodeID
 	app.graphEditorItem = max(item, 0)
 	app.graphContextOpen = false
+	app.graphEditorSection = 0
+	if node.Kind != graphNodeWait {
+		openGraphFullEditor(node, item)
+		invalidateScenarioGraphWindows()
+		return
+	}
 	ensureGraphCompactTextControl()
 	loadGraphCompactText()
 	invalidateScenarioGraphWindows()
+}
+
+func openGraphFullEditor(node *ScenarioGraphNode, item int) {
+	oldSection := app.section
+	switch node.Kind {
+	case graphNodeCondition:
+		openConditionEditor(item)
+		app.graphEditorSection = 8
+	case graphNodeAction:
+		openStepEditor(item)
+		app.graphEditorSection = 9
+	case graphNodeTrigger:
+		loadGraphTriggerIntoLegacyEditor(node)
+		app.graphEditorSection = 15
+	case graphNodeFinish:
+		app.graphEditorSection = 14
+	}
+	app.section = oldSection
+	app.pageAnim = 1
+	if app.graphEditorText != 0 {
+		pShowWindow.Call(app.graphEditorText, SW_HIDE)
+	}
+}
+
+func loadGraphTriggerIntoLegacyEditor(node *ScenarioGraphNode) {
+	app.selectedMode = node.Mode
+	if app.scenarioSavedDraft {
+		t := &app.savedEditDraft
+		t.Mode, t.DelayHours, t.DelayMinutes, t.DelaySeconds = node.Mode, node.DelayHours, node.DelayMins, node.DelaySecs
+		t.Exact, t.IdleMinutes, t.WatchProcess, t.Recurrence = node.Exact, node.IdleSecs, node.Process, node.Recurrence
+	} else {
+		app.settings.Mode = node.Mode
+		app.settings.DelayHours, app.settings.DelayMinutes, app.settings.DelaySeconds = node.DelayHours, node.DelayMins, node.DelaySecs
+		app.settings.Exact, app.settings.IdleMinutes, app.settings.WatchProcess, app.settings.Recurrence = node.Exact, node.IdleSecs, node.Process, node.Recurrence
+	}
+	pSetWindowTextW.Call(app.edits[idDelayHours], uintptr(unsafe.Pointer(wstr(strconv.Itoa(node.DelayHours)))))
+	pSetWindowTextW.Call(app.edits[idDelayMinutes], uintptr(unsafe.Pointer(wstr(strconv.Itoa(node.DelayMins)))))
+	pSetWindowTextW.Call(app.edits[idDelaySeconds], uintptr(unsafe.Pointer(wstr(strconv.Itoa(node.DelaySecs)))))
+	setExactFields(node.Exact)
+	pSetWindowTextW.Call(app.edits[idIdleMinutes], uintptr(unsafe.Pointer(wstr(strconv.Itoa(max(node.IdleSecs, 1))))))
+	pSetWindowTextW.Call(app.edits[idWatchProcess], uintptr(unsafe.Pointer(wstr(node.Process))))
+	pSetWindowTextW.Call(app.edits[idScheduleTime], uintptr(unsafe.Pointer(wstr(node.Recurrence.TimeHHMM))))
 }
 
 func ensureGraphCompactTextControl() {
@@ -101,6 +156,9 @@ func handleGraphDoubleClick(x, y int32) bool {
 	if app.section != 7 && app.section != 13 {
 		return false
 	}
+	if app.graphWindow != 0 && !scenarioGraphDetachedInput {
+		return false
+	}
 	for _, function := range app.graphFunctionHits {
 		if pointIn(function.Rect, x, y) {
 			openGraphCompactEditor(function.NodeID, function.Index)
@@ -122,6 +180,10 @@ func drawGraphCompactEditor(hdc uintptr, body RECT) {
 	if !app.graphEditorOpen {
 		return
 	}
+	if app.graphEditorSection != 0 {
+		drawGraphFullEditor(hdc, body)
+		return
+	}
 	node := ensureCurrentScenarioGraph().node(app.graphEditorNodeID)
 	if node == nil {
 		app.graphEditorOpen = false
@@ -132,7 +194,9 @@ func drawGraphCompactEditor(hdc uintptr, body RECT) {
 	x := int(body.Left+body.Right)/2 - w/2
 	y := int(body.Top+body.Bottom)/2 - h/2
 	app.graphEditorRect = RECT{int32(x), int32(y), int32(x + w), int32(y + h)}
-	fill(hdc, body, blendColor(theme.bg, rgb(0, 0, 0), .36))
+	if ui2d.active {
+		d2dFillRoundedOpacity(body, rgb(0, 0, 0), 18, .38)
+	}
 	roundFill(hdc, app.graphEditorRect, surfacePanelColor(), 15)
 	if ui2d.active {
 		d2dDrawRoundedOutline(app.graphEditorRect, 15, 1.4, blendColor(theme.border, theme.accent2, .50))
@@ -218,9 +282,149 @@ func drawGraphCompactEditor(hdc uintptr, body RECT) {
 	drawText(hdc, "Изменения применяются сразу · двойной щелчок открывает этот редактор", x+18, y+h-28, w-36, 18, 9, 450, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 }
 
+func graphFullEditorInputIDs(section int) []int {
+	switch section {
+	case 8:
+		return []int{idCondThreshold, idCondHold, idCondText, idCondDelay}
+	case 9:
+		return []int{idStepValue, idStepText, idStepRetries, idStepDelay}
+	case 15:
+		return []int{idDelayHours, idDelayMinutes, idDelaySeconds, idExactDay, idExactMonth, idExactYear, idExactHour, idExactMinute, idIdleMinutes, idWatchProcess, idScheduleTime}
+	}
+	return nil
+}
+
+func graphLegacyEditorBody() (RECT, int) {
+	var physical RECT
+	pGetClientRect.Call(app.hwnd, uintptr(unsafe.Pointer(&physical)))
+	logical := logicalClientRect040(physical)
+	w, h := int(logical.Right), int(logical.Bottom)
+	top := 110
+	if app.graphEditorSection == 4 && app.processPickerMode != 1 {
+		top = 184
+	}
+	return RECT{20, int32(top), int32(w - 20), int32(h - 20)}, w
+}
+
+func prepareGraphFullEditorLayout(body RECT) (RECT, int) {
+	legacy, legacyW := graphLegacyEditorBody()
+	panelW, panelH := int(legacy.Right-legacy.Left), int(legacy.Bottom-legacy.Top)
+	x := int(body.Left+body.Right)/2 - panelW/2
+	y := int(body.Top+body.Bottom)/2 - panelH/2
+	if x < int(body.Left)+16 {
+		x = int(body.Left) + 16
+	}
+	if y < int(body.Top)+16 {
+		y = int(body.Top) + 16
+	}
+	app.graphEditorRect = RECT{int32(x), int32(y), int32(x + panelW), int32(y + panelH)}
+	app.graphEditorLegacyBody = legacy
+	app.graphEditorDX, app.graphEditorDY = int32(x)-legacy.Left, int32(y)-legacy.Top
+	oldSection := app.section
+	app.section = app.graphEditorSection
+	layoutControls(app.hwnd)
+	app.section = oldSection
+	positionGraphFullEditorInputs()
+	return legacy, legacyW
+}
+
+func positionGraphFullEditorInputs() {
+	for _, id := range graphFullEditorInputIDs(app.graphEditorSection) {
+		h := app.edits[id]
+		if h == 0 {
+			continue
+		}
+		visible, _, _ := pIsWindowVisible.Call(h)
+		var wr RECT
+		pGetWindowRect.Call(h, uintptr(unsafe.Pointer(&wr)))
+		pt := POINT{X: wr.Left, Y: wr.Top}
+		parent, _, _ := pGetParentGraphEditor.Call(h)
+		if parent != 0 {
+			pScreenToClient.Call(parent, uintptr(unsafe.Pointer(&pt)))
+		}
+		pSetParentGraphEditor.Call(h, app.graphWindow)
+		dx, dy := scaledInt040(int(app.graphEditorDX)), scaledInt040(int(app.graphEditorDY))
+		pMoveWindow.Call(h, uintptr(int(pt.X)+dx), uintptr(int(pt.Y)+dy), uintptr(wr.Right-wr.Left), uintptr(wr.Bottom-wr.Top), 1)
+		if visible != 0 {
+			pShowWindow.Call(h, SW_SHOW)
+		} else {
+			pShowWindow.Call(h, SW_HIDE)
+		}
+	}
+}
+
+func drawGraphFullEditor(hdc uintptr, body RECT) {
+	legacy, legacyW := prepareGraphFullEditorLayout(body)
+	if ui2d.active {
+		d2dFillRoundedOpacity(body, rgb(0, 0, 0), 18, .38)
+	}
+	roundFill(hdc, app.graphEditorRect, surfacePanelColor(), 18)
+	if ui2d.active {
+		d2dDrawRoundedOutline(app.graphEditorRect, 18, 1.2, blendColor(theme.border, theme.accent2, .42))
+		d2dSetTranslation(float32(app.graphEditorDX), float32(app.graphEditorDY))
+	}
+	switch app.graphEditorSection {
+	case 4:
+		drawProcessesPage(hdc, legacy, legacyW)
+	case 8:
+		drawConditionEditor(hdc, legacy, legacyW)
+	case 9:
+		drawStepEditor(hdc, legacy, legacyW)
+	case 14:
+		drawBlockActionEditor(hdc, legacy, legacyW)
+	case 15:
+		drawBlockWhenEditor(hdc, legacy, legacyW)
+	}
+	if app.confirmSystemMode != 0 {
+		drawSystemProcessConfirmation(hdc, RECT{0, 0, int32(legacyW), legacy.Bottom + 20})
+	}
+	if ui2d.active {
+		d2dSetTranslation(0, 0)
+	}
+}
+
+func closeGraphFullEditor() {
+	for _, id := range graphFullEditorInputIDs(app.graphEditorSection) {
+		if h := app.edits[id]; h != 0 {
+			pShowWindow.Call(h, SW_HIDE)
+			pSetParentGraphEditor.Call(h, app.hwnd)
+		}
+	}
+	app.graphEditorOpen = false
+	app.graphEditorSection = 0
+	app.editingCondition, app.editingStep = -1, -1
+	layoutControls(app.hwnd)
+	invalidateScenarioGraphWindows()
+}
+
+func handleGraphFullEditorClick(x, y int32) bool {
+	if app.graphEditorSection == 0 {
+		return false
+	}
+	if !pointIn(app.graphEditorRect, x, y) {
+		return true
+	}
+	localX, localY := x-app.graphEditorDX, y-app.graphEditorDY
+	graphSection := app.section
+	app.section = app.graphEditorSection
+	onClick(localX, localY)
+	resultSection := app.section
+	app.section = graphSection
+	if resultSection == 7 || resultSection == 13 {
+		closeGraphFullEditor()
+	} else if resultSection == 4 || resultSection == 8 || resultSection == 9 || resultSection == 14 || resultSection == 15 {
+		app.graphEditorSection = resultSection
+	}
+	invalidateScenarioGraphWindows()
+	return true
+}
+
 func handleGraphCompactEditorClick(x, y int32) bool {
 	if !app.graphEditorOpen {
 		return false
+	}
+	if app.graphEditorSection != 0 {
+		return handleGraphFullEditorClick(x, y)
 	}
 	if pointIn(app.graphEditorCloseRect, x, y) || !pointIn(app.graphEditorRect, x, y) {
 		syncGraphCompactText()

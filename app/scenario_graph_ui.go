@@ -155,8 +155,9 @@ func layoutScenarioGraphEditor(body RECT, detached bool) {
 	}
 	paletteW := 142
 	app.graphCanvasRect = RECT{int32(left + paletteW + 10), int32(top), int32(right), int32(bottom)}
+	paletteTop := top + 34
 	for i := range app.graphPaletteRects {
-		y := top + i*42
+		y := paletteTop + i*42
 		app.graphPaletteRects[i] = RECT{int32(left), int32(y), int32(left + paletteW), int32(y + 34)}
 	}
 	zoomWidths := []int{36, 36, 78}
@@ -240,12 +241,6 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	app.graphPortHits = app.graphPortHits[:0]
 	app.graphFunctionHits = app.graphFunctionHits[:0]
 	drawText(hdc, "Редактор сценария", int(body.Left)+18, int(body.Top)+14, 290, 30, 20, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	subtitleX := int(body.Left) + 306
-	subtitleRight := int(app.previewRect.Left) - 14
-	if !detached && app.graphDetachRect.Right > app.graphDetachRect.Left {
-		subtitleRight = int(app.graphDetachRect.Left) - 14
-	}
-	drawText(hdc, "Перетаскивай блоки и соединяй выходы со входами", subtitleX, int(body.Top)+16, max(80, subtitleRight-subtitleX), 26, 11, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	drawButton(hdc, app.previewRect, "Проверить", false)
 	if !detached {
 		drawButton(hdc, app.graphDetachRect, "Открыть отдельно", false)
@@ -254,7 +249,7 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	for i, r := range app.graphPaletteRects {
 		drawButton(hdc, r, labels[i], false)
 	}
-	drawText(hdc, "Блоки", int(app.graphPaletteRects[0].Left), int(app.graphPaletteRects[0].Top)-28, 120, 20, 12, 650, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Блоки", int(app.graphPaletteRects[0].Left), int(app.graphPaletteRects[0].Top)-24, 120, 18, 12, 650, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	canvas := app.graphCanvasRect
 	roundFill(hdc, canvas, blendColor(theme.bg, surfacePanelColor(), .36), 14)
 	if ui2d.active {
@@ -268,6 +263,11 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 		}
 		for y := oy; y < canvas.Bottom; y += step {
 			d2dDrawLine(float32(canvas.Left), float32(y), float32(canvas.Right), float32(y), .55, grid)
+		}
+		if app.graphMarquee {
+			marquee := graphRectNormalized(app.graphMarqueeStartX, app.graphMarqueeStartY, app.graphMarqueeX, app.graphMarqueeY)
+			d2dFillRoundedOpacity(marquee, theme.accent2, 3, .16)
+			d2dDrawRoundedOutline(marquee, 3, 1, theme.accent2)
 		}
 		for _, e := range g.Edges {
 			from, to := g.node(e.From), g.node(e.To)
@@ -294,13 +294,6 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 			drawScenarioGraphNode(hdc, g, n)
 		}
 		d2dPopClip()
-	}
-	if app.graphMarquee {
-		marquee := graphRectNormalized(app.graphMarqueeStartX, app.graphMarqueeStartY, app.graphMarqueeX, app.graphMarqueeY)
-		roundFill(hdc, marquee, blendColor(theme.bg, theme.accent2, .14), 3)
-		if ui2d.active {
-			d2dDrawRoundedOutline(marquee, 3, 1, theme.accent2)
-		}
 	}
 	for i, label := range []string{"−", "+", "Вписать"} {
 		drawButton(hdc, app.graphZoomRects[i], label, false)
@@ -453,15 +446,15 @@ func handleScenarioGraphClick(x, y int32) bool {
 		return false
 	}
 	g := ensureCurrentScenarioGraph()
-	if handleGraphCompactEditorClick(x, y) || handleGraphContextClick(x, y) {
-		return true
-	}
 	if !scenarioGraphDetachedInput && pointIn(app.graphDetachRect, x, y) {
 		openScenarioGraphWindow()
 		return true
 	}
 	if app.graphWindow != 0 && !scenarioGraphDetachedInput {
 		return false
+	}
+	if handleGraphCompactEditorClick(x, y) || handleGraphContextClick(x, y) {
+		return true
 	}
 	if pointIn(app.previewRect, x, y) {
 		app.checkReturnSection = app.section
@@ -549,6 +542,9 @@ func handleScenarioGraphClick(x, y int32) bool {
 }
 
 func handleScenarioGraphMouseMove(x, y int32) bool {
+	if updateGraphMiddleButton(x, y) {
+		return true
+	}
 	if updateGraphRightButton(x, y) {
 		return true
 	}
@@ -576,10 +572,7 @@ func handleScenarioGraphMouseMove(x, y int32) bool {
 }
 
 func finishScenarioGraphPointer() bool {
-	if app.graphMarquee {
-		app.graphMarquee = false
-		pReleaseCapture.Call()
-		invalidateScenarioGraphWindows()
+	if finishGraphMarquee() {
 		return true
 	}
 	if !app.graphDragging {

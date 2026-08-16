@@ -116,9 +116,17 @@ func normalizeSettings() {
 	if app.settings.ResourceTimelineMode < 0 || app.settings.ResourceTimelineMode > 1 {
 		app.settings.ResourceTimelineMode = 0
 	}
-	if app.settings.GraphWindowSize < 0 || app.settings.GraphWindowSize > 2 {
+	if app.settings.GraphWindowSize < -1 || app.settings.GraphWindowSize > 2 {
 		app.settings.GraphWindowSize = 0
 	}
+	if app.settings.GraphWindowWidth <= 0 {
+		app.settings.GraphWindowWidth, _ = scenarioGraphPresetSize(app.settings.GraphWindowSize)
+	}
+	if app.settings.GraphWindowHeight <= 0 {
+		_, app.settings.GraphWindowHeight = scenarioGraphPresetSize(app.settings.GraphWindowSize)
+	}
+	app.settings.GraphWindowWidth = clampInt(app.settings.GraphWindowWidth, 900, 3840)
+	app.settings.GraphWindowHeight = clampInt(app.settings.GraphWindowHeight, 760, 2160)
 	app.settings.AdvancedConditions = migrateLegacyConditionGroups(app.settings.AdvancedConditions)
 	for i := range app.settings.SavedTasks {
 		app.settings.SavedTasks[i].Conditions = migrateLegacyConditionGroups(app.settings.SavedTasks[i].Conditions)

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"strconv"
 	"syscall"
 	"unsafe"
 )
@@ -66,6 +67,9 @@ func openScenarioGraphWindow() {
 }
 
 func scenarioGraphWindowSize() (int, int) {
+	if app.settings.GraphWindowSizeLocked {
+		return graphWindowWidth(), graphWindowHeight()
+	}
 	switch app.settings.GraphWindowSize {
 	case 1:
 		return 1440, 900
@@ -73,6 +77,56 @@ func scenarioGraphWindowSize() (int, int) {
 		return 1600, 960
 	default:
 		return 1280, 820
+	}
+}
+
+func graphWindowWidth() int {
+	if app.settings.GraphWindowWidth > 0 {
+		return clampInt(app.settings.GraphWindowWidth, 900, 3840)
+	}
+	w, _ := scenarioGraphPresetSize(app.settings.GraphWindowSize)
+	return w
+}
+
+func graphWindowHeight() int {
+	if app.settings.GraphWindowHeight > 0 {
+		return clampInt(app.settings.GraphWindowHeight, 760, 2160)
+	}
+	_, h := scenarioGraphPresetSize(app.settings.GraphWindowSize)
+	return h
+}
+
+func scenarioGraphPresetSize(index int) (int, int) {
+	switch index {
+	case 1:
+		return 1440, 900
+	case 2:
+		return 1600, 960
+	default:
+		return 1280, 820
+	}
+}
+
+func applyGraphWindowSizeFields() {
+	w := clampInt(parseInt(getText(app.edits[idGraphWidth]), graphWindowWidth()), 900, 3840)
+	h := clampInt(parseInt(getText(app.edits[idGraphHeight]), graphWindowHeight()), 760, 2160)
+	app.settings.GraphWindowWidth, app.settings.GraphWindowHeight = w, h
+	app.settings.GraphWindowSize = -1
+	setEditTextIfDifferent(idGraphWidth, strconv.Itoa(w))
+	setEditTextIfDifferent(idGraphHeight, strconv.Itoa(h))
+	saveSettings()
+}
+
+func resizeScenarioGraphWindow(width, height int) {
+	if app.graphWindow == 0 {
+		return
+	}
+	if zoomed, _, _ := pIsZoomed.Call(app.graphWindow); zoomed != 0 {
+		pShowWindow.Call(app.graphWindow, SW_RESTORE)
+	}
+	var wr RECT
+	if ok, _, _ := pGetWindowRect.Call(app.graphWindow, uintptr(unsafe.Pointer(&wr))); ok != 0 {
+		pMoveWindow.Call(app.graphWindow, uintptr(wr.Left), uintptr(wr.Top), uintptr(width), uintptr(height), 1)
 	}
 }
 
@@ -134,7 +188,7 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 	switch msg {
 	case WM_GETMINMAXINFO:
 		mmi := (*MINMAXINFO)(unsafe.Pointer(lParam))
-		mmi.PtMinTrackSize = POINT{900, 580}
+		mmi.PtMinTrackSize = POINT{900, 760}
 		if monitor, _, _ := pMonitorFromWindow.Call(hwnd, MONITOR_DEFAULTTONEAREST); monitor != 0 {
 			info := MONITORINFO{CbSize: uint32(unsafe.Sizeof(MONITORINFO{}))}
 			if ok, _, _ := pGetMonitorInfoW.Call(monitor, uintptr(unsafe.Pointer(&info))); ok != 0 {
@@ -162,6 +216,10 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 		pSetBkMode.Call(wParam, TRANSPARENT)
 		pSetTextColor.Call(wParam, uintptr(theme.text))
 		return controlBrush
+	case WM_COMMAND:
+		onCommand(loword(wParam), hiword(wParam), lParam)
+		pInvalidateRect.Call(hwnd, 0, 0)
+		return 0
 	case WM_MOUSEMOVE:
 		x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
 		app.mouseX, app.mouseY = x, y
@@ -178,7 +236,7 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 		x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
 		app.mouseX, app.mouseY = x, y
 		if pointIn(app.graphTitleCloseRect, x, y) {
-			pDestroyWindow.Call(hwnd)
+			pSendMessageW.Call(hwnd, WM_CLOSE, 0, 0)
 			return 0
 		}
 		if pointIn(app.graphTitleMinRect, x, y) {
@@ -220,6 +278,16 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 		app.mouseX, app.mouseY = x, y
 		finishGraphRightButton(x, y)
 		return 0
+	case WM_MBUTTONDOWN:
+		x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
+		app.mouseX, app.mouseY = x, y
+		if pointIn(app.graphCanvasRect, x, y) {
+			beginGraphMiddleButton(x, y)
+		}
+		return 0
+	case WM_MBUTTONUP:
+		finishGraphMiddleButton()
+		return 0
 	case WM_MOUSEWHEEL:
 		zoomScenarioGraph(int16((wParam >> 16) & 0xFFFF))
 		return 0
@@ -230,8 +298,12 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 		}
 	case WM_CLOSE:
 		if app.graphEditorOpen {
-			syncGraphCompactText()
-			persistCurrentScenarioGraph()
+			if app.graphEditorSection != 0 {
+				closeGraphFullEditor()
+			} else {
+				syncGraphCompactText()
+				persistCurrentScenarioGraph()
+			}
 		}
 		pDestroyWindow.Call(hwnd)
 		return 0

@@ -18,6 +18,7 @@ func resetGraphInteraction() {
 	app.graphSelectedNodeID, app.graphSelectedEdgeID = "", ""
 	app.graphConnectingNodeID, app.graphConnectingPort = "", ""
 	app.graphContextOpen, app.graphEditorOpen = false, false
+	app.graphRightDown, app.graphMiddleDown, app.graphMarquee, app.graphDragging = false, false, false, false
 }
 
 func ensureGraphSelection() map[string]bool {
@@ -108,6 +109,43 @@ func updateGraphMarquee(x, y int32) {
 			app.graphSelectedNodeID = node.ID
 		}
 	}
+	for _, edge := range g.Edges {
+		if graphEdgeIntersectsRect(g, edge, r) {
+			app.graphSelectedEdgeID = edge.ID
+			break
+		}
+	}
+}
+
+func finishGraphMarquee() bool {
+	if !app.graphMarquee {
+		return false
+	}
+	app.graphMarquee = false
+	pReleaseCapture.Call()
+	invalidateScenarioGraphWindows()
+	return true
+}
+
+func graphEdgeIntersectsRect(g *ScenarioGraph, edge ScenarioGraphEdge, r RECT) bool {
+	from, to := g.node(edge.From), g.node(edge.To)
+	if from == nil || to == nil {
+		return false
+	}
+	x1, y1 := graphOutputPoint(g, *from, edge.FromPort)
+	x2, y2 := graphInputPoint(g, *to)
+	mid := (x1 + x2) / 2
+	if x2 < x1+42 {
+		mid = x1 + 42
+	}
+	segments := [][4]float32{{x1, y1, mid, y1}, {mid, y1, mid, y2}, {mid, y2, x2, y2}}
+	for _, s := range segments {
+		bounds := RECT{int32(math.Min(float64(s[0]), float64(s[2]))) - 5, int32(math.Min(float64(s[1]), float64(s[3]))) - 5, int32(math.Max(float64(s[0]), float64(s[2]))) + 5, int32(math.Max(float64(s[1]), float64(s[3]))) + 5}
+		if graphRectsIntersect(r, bounds) {
+			return true
+		}
+	}
+	return false
 }
 
 func graphPortColor(port string) uint32 {
@@ -137,9 +175,9 @@ func graphEdgeHit(x, y int32) string {
 		if x2 < x1+42 {
 			mid = x1 + 42
 		}
-		if graphPointSegmentDistance(float64(x), float64(y), float64(x1), float64(y1), float64(mid), float64(y1)) <= 7 ||
-			graphPointSegmentDistance(float64(x), float64(y), float64(mid), float64(y1), float64(mid), float64(y2)) <= 7 ||
-			graphPointSegmentDistance(float64(x), float64(y), float64(mid), float64(y2), float64(x2), float64(y2)) <= 7 {
+		if graphPointSegmentDistance(float64(x), float64(y), float64(x1), float64(y1), float64(mid), float64(y1)) <= 10 ||
+			graphPointSegmentDistance(float64(x), float64(y), float64(mid), float64(y1), float64(mid), float64(y2)) <= 10 ||
+			graphPointSegmentDistance(float64(x), float64(y), float64(mid), float64(y2), float64(x2), float64(y2)) <= 10 {
 			return edge.ID
 		}
 	}
@@ -298,6 +336,40 @@ func beginGraphRightButton(x, y int32) {
 	pSetCapture.Call(scenarioGraphInputWindow())
 }
 
+func beginGraphMiddleButton(x, y int32) {
+	if app.graphEditorOpen {
+		return
+	}
+	app.graphMiddleDown = true
+	app.graphMiddlePanning = true
+	app.graphMiddleStartX, app.graphMiddleStartY = x, y
+	app.graphLastMouseX, app.graphLastMouseY = x, y
+	app.graphContextOpen = false
+	pSetCapture.Call(scenarioGraphInputWindow())
+}
+
+func updateGraphMiddleButton(x, y int32) bool {
+	if !app.graphMiddleDown {
+		return false
+	}
+	g := ensureCurrentScenarioGraph()
+	g.ViewX += float64(x-app.graphLastMouseX) / g.Zoom
+	g.ViewY += float64(y-app.graphLastMouseY) / g.Zoom
+	app.graphLastMouseX, app.graphLastMouseY = x, y
+	invalidateScenarioGraphWindows()
+	return true
+}
+
+func finishGraphMiddleButton() bool {
+	if !app.graphMiddleDown {
+		return false
+	}
+	app.graphMiddleDown, app.graphMiddlePanning = false, false
+	pReleaseCapture.Call()
+	persistCurrentScenarioGraph()
+	return true
+}
+
 func updateGraphRightButton(x, y int32) bool {
 	if !app.graphRightDown {
 		return false
@@ -425,6 +497,10 @@ func handleGraphKeyboard(vk uintptr) bool {
 	}
 	if app.graphEditorOpen {
 		if vk == 0x1B {
+			if app.graphEditorSection != 0 {
+				closeGraphFullEditor()
+				return true
+			}
 			syncGraphCompactText()
 			app.graphEditorOpen = false
 			if app.graphEditorText != 0 {
