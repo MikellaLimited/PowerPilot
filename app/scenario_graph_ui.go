@@ -30,6 +30,10 @@ type GraphFunctionHit struct {
 	Rect   RECT
 }
 
+func scenarioGraphInteractionEnabled() bool {
+	return app.section == 7 || app.section == 13 || (scenarioGraphDetachedInput && app.graphWindow != 0)
+}
+
 func currentScenarioGraph() *ScenarioGraph {
 	if app.scenarioSavedDraft {
 		return &app.savedEditDraft.Graph
@@ -330,24 +334,28 @@ func drawScenarioGraphNode(hdc uintptr, g *ScenarioGraph, n ScenarioGraphNode) {
 		return
 	}
 	selected := graphNodeSelected(n.ID)
+	z := maxFloat(.1, g.Zoom)
+	scaled := func(value, minimum int) int32 { return int32(max(minimum, int(float64(value)*z+.5))) }
 	fillColor := graphNodeColor(n.Kind)
-	roundFill(hdc, r, fillColor, int32(max(7, int(12*g.Zoom))))
+	roundFill(hdc, r, fillColor, scaled(12, 3))
 	if ui2d.active {
 		outline := blendColor(theme.border, theme.text, .35)
 		stroke := float32(1)
 		if selected {
 			outline, stroke = theme.accent2, 2.2
 		}
-		d2dDrawRoundedOutline(r, float32(max(7, int(12*g.Zoom))), stroke, outline)
+		d2dDrawRoundedOutline(r, float32(scaled(12, 3)), stroke, outline)
 	}
-	headerH := int32(max(26, int(34*g.Zoom)))
+	headerH := scaled(34, 12)
 	header := RECT{r.Left, r.Top, r.Right, r.Top + headerH}
 	deleteR := RECT{}
-	addBottomPad := int32(max(3, int(6*g.Zoom)))
-	addHeight := int32(max(11, int(20*g.Zoom)))
-	addR := RECT{r.Left + 8, r.Bottom - addBottomPad - addHeight, r.Right - 8, r.Bottom - addBottomPad}
+	addBottomPad := scaled(6, 2)
+	addHeight := scaled(20, 7)
+	horizontalInset := scaled(8, 3)
+	addR := RECT{r.Left + horizontalInset, r.Bottom - addBottomPad - addHeight, r.Right - horizontalInset, r.Bottom - addBottomPad}
 	app.graphNodeHits = append(app.graphNodeHits, GraphNodeHit{ID: n.ID, Rect: r, Header: header, Delete: deleteR, Add: addR})
-	drawText(hdc, graphNodeKindName(n.Kind), int(r.Left)+12, int(r.Top)+5, int(r.Right-r.Left)-24, int(headerH)-8, max(5, int(11*g.Zoom)), 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	titleInset, titleTop := scaled(12, 4), scaled(5, 2)
+	drawText(hdc, graphNodeKindName(n.Kind), int(r.Left+titleInset), int(r.Top+titleTop), max(1, int(r.Right-r.Left-titleInset*2)), max(1, int(headerH-titleTop*2)), max(3, int(11*z)), 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	items := []string{}
 	itemKind := 0
 	switch n.Kind {
@@ -374,20 +382,21 @@ func drawScenarioGraphNode(hdc uintptr, g *ScenarioGraph, n ScenarioGraphNode) {
 	if len(items) == 0 {
 		items = []string{"Нажми +, чтобы добавить функцию"}
 	}
-	rowY := r.Top + headerH + 5
-	rowH := int32(max(10, int(22*g.Zoom)))
+	rowY := r.Top + headerH + scaled(5, 2)
+	rowH := scaled(22, 6)
+	rowInset, textInset := scaled(9, 3), scaled(4, 1)
 	for i := 0; i < len(items) && i < 4; i++ {
-		rr := RECT{r.Left + 9, rowY + int32(i)*rowH, r.Right - 9, rowY + int32(i+1)*rowH - 2}
-		drawText(hdc, items[i], int(rr.Left)+4, int(rr.Top), int(rr.Right-rr.Left)-8, int(rr.Bottom-rr.Top), max(5, int(9*g.Zoom)), 450, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		rr := RECT{r.Left + rowInset, rowY + int32(i)*rowH, r.Right - rowInset, rowY + int32(i+1)*rowH - scaled(2, 1)}
+		drawText(hdc, items[i], int(rr.Left+textInset), int(rr.Top), max(1, int(rr.Right-rr.Left-textInset*2)), max(1, int(rr.Bottom-rr.Top)), max(3, int(9*z)), 450, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 		if itemKind != 0 {
 			app.graphFunctionHits = append(app.graphFunctionHits, GraphFunctionHit{NodeID: n.ID, Kind: itemKind, Index: i, Rect: rr})
 		}
 	}
 	if n.Kind == graphNodeCondition || n.Kind == graphNodeAction {
-		drawText(hdc, "+ Добавить функцию", int(addR.Left), int(addR.Top), int(addR.Right-addR.Left), int(addR.Bottom-addR.Top), max(5, int(9*g.Zoom)), 600, theme.accent2, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "+ Добавить функцию", int(addR.Left), int(addR.Top), int(addR.Right-addR.Left), int(addR.Bottom-addR.Top), max(3, int(9*z)), 600, theme.accent2, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
 	inX, inY := graphInputPoint(g, n)
-	portRadius := int32(max(3, int(7*g.Zoom)))
+	portRadius := scaled(7, 2)
 	inRect := RECT{int32(inX) - portRadius, int32(inY) - portRadius, int32(inX) + portRadius, int32(inY) + portRadius}
 	if n.Kind != graphNodeTrigger {
 		roundFill(hdc, inRect, theme.text, portRadius)
@@ -399,7 +408,8 @@ func drawScenarioGraphNode(hdc uintptr, g *ScenarioGraph, n ScenarioGraphNode) {
 		pc := graphPortColor(port)
 		roundFill(hdc, pr, pc, portRadius)
 		app.graphPortHits = append(app.graphPortHits, GraphPortHit{NodeID: n.ID, Port: port, Rect: pr})
-		drawText(hdc, graphPortName(port), int(r.Right)-66, int(y)-9, 54, 18, max(5, int(8*g.Zoom)), 550, pc, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
+		labelW, labelH := scaled(54, 18), scaled(18, 7)
+		drawText(hdc, graphPortName(port), int(r.Right-labelW-scaled(12, 4)), int(y)-int(labelH)/2, int(labelW), int(labelH), max(3, int(8*z)), 550, pc, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 	}
 }
 
@@ -442,7 +452,7 @@ func fitScenarioGraph() {
 }
 
 func handleScenarioGraphClick(x, y int32) bool {
-	if app.section != 7 && app.section != 13 {
+	if !scenarioGraphInteractionEnabled() {
 		return false
 	}
 	g := ensureCurrentScenarioGraph()

@@ -6544,7 +6544,7 @@ func animate() {
 		// smootherstep: zero velocity and zero acceleration at both ends.
 		e := p * p * p * (p*(p*6-15) + 10)
 		app.conditionCatalogAnim = app.conditionCatalogFrom + (app.conditionCatalogTarget-app.conditionCatalogFrom)*e
-		if app.section == 8 {
+		if app.section == 8 || (app.graphWindow != 0 && app.graphEditorSection == 8) {
 			// Only the moving condition-editor geometry changes during the transition.
 			// Native EDITs were hidden once at animation start; repeatedly hiding them
 			// here caused the close-only flash on some Windows builds.
@@ -6744,7 +6744,11 @@ func animate() {
 			shiftVisibleEditsForAnimation()
 			invalidateVisibleEdits()
 		}
-		invalidate(app.hwnd)
+		if app.graphWindow != 0 {
+			invalidateScenarioGraphWindows()
+		} else {
+			invalidate(app.hwnd)
+		}
 	}
 }
 

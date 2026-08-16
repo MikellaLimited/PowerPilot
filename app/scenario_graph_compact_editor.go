@@ -153,7 +153,7 @@ func syncGraphCompactText() {
 }
 
 func handleGraphDoubleClick(x, y int32) bool {
-	if app.section != 7 && app.section != 13 {
+	if !scenarioGraphInteractionEnabled() {
 		return false
 	}
 	if app.graphWindow != 0 && !scenarioGraphDetachedInput {
@@ -335,6 +335,9 @@ func positionGraphFullEditorInputs() {
 			continue
 		}
 		visible, _, _ := pIsWindowVisible.Call(h)
+		if app.graphEditorSection == 8 && app.conditionCatalogAnimating {
+			visible = 0
+		}
 		var wr RECT
 		pGetWindowRect.Call(h, uintptr(unsafe.Pointer(&wr)))
 		pt := POINT{X: wr.Left, Y: wr.Top}
@@ -344,7 +347,7 @@ func positionGraphFullEditorInputs() {
 		}
 		pSetParentGraphEditor.Call(h, app.graphWindow)
 		dx, dy := scaledInt040(int(app.graphEditorDX)), scaledInt040(int(app.graphEditorDY))
-		pMoveWindow.Call(h, uintptr(int(pt.X)+dx), uintptr(int(pt.Y)+dy), uintptr(wr.Right-wr.Left), uintptr(wr.Bottom-wr.Top), 1)
+		pMoveWindow.Call(h, uintptr(int(pt.X)+dx), uintptr(int(pt.Y)+dy-scaledInt040(2)), uintptr(wr.Right-wr.Left), uintptr(wr.Bottom-wr.Top), 1)
 		if visible != 0 {
 			pShowWindow.Call(h, SW_SHOW)
 		} else {
@@ -355,10 +358,6 @@ func positionGraphFullEditorInputs() {
 
 func drawGraphFullEditor(hdc uintptr, body RECT) {
 	app.pageAnim, app.subRevealAnim = 1, 1
-	if app.conditionCatalogAnimating {
-		app.conditionCatalogAnim = app.conditionCatalogTarget
-		app.conditionCatalogAnimating = false
-	}
 	legacy, legacyW := prepareGraphFullEditorLayout(body)
 	if ui2d.active {
 		d2dFillRoundedOpacity(body, rgb(0, 0, 0), 18, .38)
@@ -417,10 +416,6 @@ func handleGraphFullEditorClick(x, y int32) bool {
 	app.section = app.graphEditorSection
 	onClick(localX, localY)
 	app.pageAnim, app.subRevealAnim = 1, 1
-	if app.conditionCatalogAnimating {
-		app.conditionCatalogAnim = app.conditionCatalogTarget
-		app.conditionCatalogAnimating = false
-	}
 	resultSection := app.section
 	app.section = graphSection
 	if resultSection == 7 || resultSection == 13 {

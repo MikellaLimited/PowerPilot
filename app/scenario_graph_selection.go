@@ -512,7 +512,7 @@ func handleGraphContextClick(x, y int32) bool {
 }
 
 func handleGraphKeyboard(vk uintptr) bool {
-	if app.section != 7 && app.section != 13 {
+	if !scenarioGraphInteractionEnabled() {
 		return false
 	}
 	if app.graphEditorOpen {

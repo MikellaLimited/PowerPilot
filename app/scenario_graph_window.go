@@ -11,6 +11,7 @@ import (
 var (
 	graphWindowClassRegistered bool
 	pSetForegroundWindowGraph  = user32.NewProc("SetForegroundWindow")
+	pSetBkColorGraph           = gdi32.NewProc("SetBkColor")
 	scenarioGraphDetachedInput bool
 )
 
@@ -189,11 +190,6 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 	case WM_GETMINMAXINFO:
 		mmi := (*MINMAXINFO)(unsafe.Pointer(lParam))
 		mmi.PtMinTrackSize = POINT{900, 760}
-		if app.settings.GraphWindowSizeLocked {
-			w, h := int32(graphWindowWidth()), int32(graphWindowHeight())
-			mmi.PtMinTrackSize = POINT{w, h}
-			mmi.PtMaxTrackSize = POINT{w, h}
-		}
 		if monitor, _, _ := pMonitorFromWindow.Call(hwnd, MONITOR_DEFAULTTONEAREST); monitor != 0 {
 			info := MONITORINFO{CbSize: uint32(unsafe.Sizeof(MONITORINFO{}))}
 			if ok, _, _ := pGetMonitorInfoW.Call(monitor, uintptr(unsafe.Pointer(&info))); ok != 0 {
@@ -218,7 +214,8 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 	case WM_ERASEBKGND:
 		return 1
 	case WM_CTLCOLOREDIT:
-		pSetBkMode.Call(wParam, TRANSPARENT)
+		pSetBkMode.Call(wParam, 2)
+		pSetBkColorGraph.Call(wParam, uintptr(surfaceButtonColor()))
 		pSetTextColor.Call(wParam, uintptr(theme.text))
 		return controlBrush
 	case WM_COMMAND:
@@ -297,7 +294,10 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 		zoomScenarioGraph(int16((wParam >> 16) & 0xFFFF))
 		return 0
 	case WM_KEYDOWN:
-		if handleKeyDown040(wParam) {
+		scenarioGraphDetachedInput = true
+		handled := handleKeyDown040(wParam)
+		scenarioGraphDetachedInput = false
+		if handled {
 			invalidateScenarioGraphWindows()
 			return 0
 		}
@@ -410,7 +410,7 @@ func hitTestScenarioGraphWindow(hwnd uintptr, lParam uintptr) uintptr {
 	pScreenToClient.Call(hwnd, uintptr(unsafe.Pointer(&pt)))
 	var rc RECT
 	pGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
-	if zoomed, _, _ := pIsZoomed.Call(hwnd); zoomed == 0 {
+	if zoomed, _, _ := pIsZoomed.Call(hwnd); zoomed == 0 && !app.settings.GraphWindowSizeLocked {
 		const edge int32 = 7
 		left, right := pt.X < edge, pt.X >= rc.Right-edge
 		top, bottom := pt.Y < edge, pt.Y >= rc.Bottom-edge
