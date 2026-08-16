@@ -55,10 +55,12 @@ func ensureCurrentScenarioGraph() *ScenarioGraph {
 
 func persistCurrentScenarioGraph() {
 	if app.scenarioSavedDraft {
+		invalidateScenarioGraphWindows()
 		return
 	}
 	saveSettings()
 	saveDraftAutosave()
+	invalidateScenarioGraphWindows()
 }
 
 func selectedGraphNode() *ScenarioGraphNode {
@@ -66,6 +68,13 @@ func selectedGraphNode() *ScenarioGraphNode {
 		return nil
 	}
 	return ensureCurrentScenarioGraph().node(app.graphSelectedNodeID)
+}
+
+func scenarioGraphInputWindow() uintptr {
+	if app.graphWindow != 0 {
+		return app.graphWindow
+	}
+	return app.hwnd
 }
 
 func syncCurrentGraphFromLegacy() {
@@ -115,17 +124,15 @@ func syncLegacyFromCurrentGraph() TaskState {
 	return st
 }
 
-func layoutScenarioGraphEditor(body RECT) {
-	if !app.graphExpandedOnce && app.hwnd != 0 && !app.settings.LockMinimumSize && !app.settings.LockCurrentSize {
-		app.graphExpandedOnce = true
-		pShowWindow.Call(app.hwnd, SW_MAXIMIZE)
-	}
+func layoutScenarioGraphEditor(body RECT, detached bool) {
 	left := int(body.Left) + 14
 	top := int(body.Top) + 58
 	right := int(body.Right) - 14
 	bottom := int(body.Bottom) - 14
-	app.savedScenarioNameRect, app.savedScenarioSaveRect, app.savedScenarioCancelRect, app.savedScenarioCheckRect = RECT{}, RECT{}, RECT{}, RECT{}
-	if app.section == 13 && app.scenarioSavedDraft {
+	if !detached {
+		app.savedScenarioNameRect, app.savedScenarioSaveRect, app.savedScenarioCancelRect, app.savedScenarioCheckRect = RECT{}, RECT{}, RECT{}, RECT{}
+	}
+	if !detached && app.section == 13 && app.scenarioSavedDraft {
 		footerY := bottom - 38
 		nameW := minInt(205, max(145, (right-left)*31/100))
 		app.savedScenarioNameRect = RECT{int32(left), int32(footerY), int32(left + nameW), int32(footerY + 36)}
@@ -143,6 +150,9 @@ func layoutScenarioGraphEditor(body RECT) {
 		bottom = footerY - 12
 	}
 	app.previewRect = RECT{body.Right - 126, body.Top + 12, body.Right - 14, body.Top + 46}
+	if !detached {
+		app.graphDetachRect = RECT{body.Right - 310, body.Top + 12, body.Right - 136, body.Top + 46}
+	}
 	paletteW := 142
 	app.graphCanvasRect = RECT{int32(left + paletteW + 10), int32(top), int32(right), int32(bottom)}
 	for i := range app.graphPaletteRects {
@@ -222,14 +232,22 @@ func graphNodeColor(kind int) uint32 {
 	return surfaceButtonColor()
 }
 
-func drawScenarioGraphEditor(hdc uintptr, body RECT, w int) {
+func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	g := ensureCurrentScenarioGraph()
 	app.graphNodeHits = app.graphNodeHits[:0]
 	app.graphPortHits = app.graphPortHits[:0]
 	app.graphFunctionHits = app.graphFunctionHits[:0]
 	drawText(hdc, "Редактор сценария", int(body.Left)+18, int(body.Top)+14, 290, 30, 20, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc, "Перетаскивай блоки и соединяй выходы со входами", int(body.Left)+306, int(body.Top)+16, int(body.Right-body.Left)-510, 26, 11, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	subtitleX := int(body.Left) + 306
+	subtitleRight := int(app.previewRect.Left) - 14
+	if !detached && app.graphDetachRect.Right > app.graphDetachRect.Left {
+		subtitleRight = int(app.graphDetachRect.Left) - 14
+	}
+	drawText(hdc, "Перетаскивай блоки и соединяй выходы со входами", subtitleX, int(body.Top)+16, max(80, subtitleRight-subtitleX), 26, 11, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	drawButton(hdc, app.previewRect, "Проверить", false)
+	if !detached {
+		drawButton(hdc, app.graphDetachRect, "Открыть отдельно", false)
+	}
 	labels := []string{"+ Триггер", "+ Условия", "+ Действия", "+ Ожидание", "+ Завершение"}
 	for i, r := range app.graphPaletteRects {
 		drawButton(hdc, r, labels[i], false)
@@ -291,7 +309,7 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int) {
 		status += fmt.Sprintf(" · ошибок: %d · предупреждений: %d", errs, warns)
 	}
 	drawText(hdc, status, int(canvas.Left)+12, int(canvas.Bottom)-27, int(canvas.Right-canvas.Left)-24, 20, 10, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	if app.section == 13 && app.scenarioSavedDraft {
+	if !detached && app.section == 13 && app.scenarioSavedDraft {
 		drawText(hdc, "Название", int(app.savedScenarioNameRect.Left), int(app.savedScenarioNameRect.Top)-18, int(app.savedScenarioNameRect.Right-app.savedScenarioNameRect.Left), 16, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		roundFill(hdc, app.savedScenarioNameRect, surfaceButtonColor(), 9)
 		drawButton(hdc, app.savedScenarioSaveRect, "Сохранить", true)
@@ -423,6 +441,23 @@ func handleScenarioGraphClick(x, y int32) bool {
 		return false
 	}
 	g := ensureCurrentScenarioGraph()
+	if !scenarioGraphDetachedInput && pointIn(app.graphDetachRect, x, y) {
+		openScenarioGraphWindow()
+		return true
+	}
+	if app.graphWindow != 0 && !scenarioGraphDetachedInput {
+		return false
+	}
+	if pointIn(app.previewRect, x, y) {
+		app.checkReturnSection = app.section
+		app.section = 12
+		playUI(openSound)
+		startPageAnimation()
+		updateInputVisibility()
+		focusMainFromScenarioGraph()
+		invalidateScenarioGraphWindows()
+		return true
+	}
 	for i, r := range app.graphPaletteRects {
 		if pointIn(r, x, y) {
 			addGraphNode(i)
@@ -496,6 +531,7 @@ func handleScenarioGraphClick(x, y int32) bool {
 				persistCurrentScenarioGraph()
 			}
 		}
+		focusMainFromScenarioGraph()
 		return true
 	}
 	for _, h := range app.graphNodeHits {
@@ -523,7 +559,7 @@ func handleScenarioGraphClick(x, y int32) bool {
 			app.graphSelectedNodeID = h.ID
 			app.graphDraggingNodeID, app.graphDragging = h.ID, true
 			app.graphLastMouseX, app.graphLastMouseY = x, y
-			pSetCapture.Call(app.hwnd)
+			pSetCapture.Call(scenarioGraphInputWindow())
 			return true
 		}
 		if pointIn(h.Rect, x, y) {
@@ -537,6 +573,7 @@ func handleScenarioGraphClick(x, y int32) bool {
 			} else if n != nil && n.Kind == graphNodeFinish {
 				app.section = 14
 			}
+			focusMainFromScenarioGraph()
 			startPageAnimation()
 			updateInputVisibility()
 			invalidate(app.hwnd)
@@ -548,7 +585,7 @@ func handleScenarioGraphClick(x, y int32) bool {
 		app.graphConnectingNodeID, app.graphConnectingPort = "", ""
 		app.graphPanning = true
 		app.graphLastMouseX, app.graphLastMouseY = x, y
-		pSetCapture.Call(app.hwnd)
+		pSetCapture.Call(scenarioGraphInputWindow())
 		invalidate(app.hwnd)
 		return true
 	}

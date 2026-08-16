@@ -1016,7 +1016,8 @@ type App struct {
 	graphLastMouseX                        int32
 	graphLastMouseY                        int32
 	graphValidation                        []GraphValidationIssue
-	graphExpandedOnce                      bool
+	graphWindow                            uintptr
+	graphDetachRect                        RECT
 	mu                                     sync.Mutex
 	exiting                                bool
 	pageAnim                               float64
@@ -1442,6 +1443,11 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		pDestroyWindow.Call(hwnd)
 		return 0
 	case WM_DESTROY:
+		if app.graphWindow != 0 {
+			graphWindow := app.graphWindow
+			app.graphWindow = 0
+			pDestroyWindow.Call(graphWindow)
+		}
 		pKillTimer.Call(hwnd, 1)
 		pKillTimer.Call(hwnd, 2)
 		stopMetricSampler()
@@ -2294,7 +2300,12 @@ func layoutControls(hwnd uintptr) {
 
 	// Block task flowchart. Saved-task editing uses the same renderer with an isolated draft.
 	if app.section == 7 || app.section == 13 {
-		layoutScenarioGraphEditor(RECT{int32(innerLeft), int32(bodyTop), int32(innerRight), int32(bodyBottom)})
+		graphBody := RECT{int32(innerLeft), int32(bodyTop), int32(innerRight), int32(bodyBottom)}
+		if app.graphWindow == 0 {
+			layoutScenarioGraphEditor(graphBody, false)
+		} else {
+			layoutScenarioGraphMainPlaceholder(graphBody)
+		}
 	}
 	if false && (app.section == 7 || app.section == 13) {
 		app.scenarioBackRect = RECT{}
@@ -4437,7 +4448,14 @@ func scenarioDragOffset(kind, idx int) int32 {
 }
 
 func drawScenarioPage(hdc uintptr, body RECT, w int) {
-	drawScenarioGraphEditor(hdc, body, w)
+	if app.graphWindow != 0 {
+		drawScenarioGraphMainPlaceholder(hdc, body)
+		if app.confirmDiscardScenario {
+			drawScenarioDiscardConfirm(hdc, body)
+		}
+		return
+	}
+	drawScenarioGraphEditor(hdc, body, w, false)
 	if app.confirmDiscardScenario {
 		drawScenarioDiscardConfirm(hdc, body)
 	}
@@ -8443,7 +8461,7 @@ func onClick(x, y int32) {
 			}
 			return
 		}
-		if pointIn(app.previewRect, x, y) {
+		if app.graphWindow == 0 && pointIn(app.previewRect, x, y) {
 			app.checkReturnSection = app.section
 			app.section = 12
 			playUI(openSound)
