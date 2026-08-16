@@ -126,7 +126,7 @@ func syncLegacyFromCurrentGraph() TaskState {
 
 func layoutScenarioGraphEditor(body RECT, detached bool) {
 	left := int(body.Left) + 14
-	top := int(body.Top) + 82
+	top := int(body.Top) + 62
 	right := int(body.Right) - 14
 	bottom := int(body.Bottom) - 14
 	if !detached {
@@ -155,7 +155,7 @@ func layoutScenarioGraphEditor(body RECT, detached bool) {
 	}
 	paletteW := 142
 	app.graphCanvasRect = RECT{int32(left + paletteW + 10), int32(top), int32(right), int32(bottom)}
-	paletteTop := top + 34
+	paletteTop := top + 24
 	for i := range app.graphPaletteRects {
 		y := paletteTop + i*42
 		app.graphPaletteRects[i] = RECT{int32(left), int32(y), int32(left + paletteW), int32(y + 34)}

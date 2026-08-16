@@ -354,6 +354,11 @@ func positionGraphFullEditorInputs() {
 }
 
 func drawGraphFullEditor(hdc uintptr, body RECT) {
+	app.pageAnim, app.subRevealAnim = 1, 1
+	if app.conditionCatalogAnimating {
+		app.conditionCatalogAnim = app.conditionCatalogTarget
+		app.conditionCatalogAnimating = false
+	}
 	legacy, legacyW := prepareGraphFullEditorLayout(body)
 	if ui2d.active {
 		d2dFillRoundedOpacity(body, rgb(0, 0, 0), 18, .38)
@@ -363,6 +368,8 @@ func drawGraphFullEditor(hdc uintptr, body RECT) {
 		d2dDrawRoundedOutline(app.graphEditorRect, 18, 1.2, blendColor(theme.border, theme.accent2, .42))
 		d2dSetTranslation(float32(app.graphEditorDX), float32(app.graphEditorDY))
 	}
+	oldMouseX, oldMouseY := app.mouseX, app.mouseY
+	app.mouseX, app.mouseY = oldMouseX-app.graphEditorDX, oldMouseY-app.graphEditorDY
 	switch app.graphEditorSection {
 	case 4:
 		drawProcessesPage(hdc, legacy, legacyW)
@@ -378,6 +385,7 @@ func drawGraphFullEditor(hdc uintptr, body RECT) {
 	if app.confirmSystemMode != 0 {
 		drawSystemProcessConfirmation(hdc, RECT{0, 0, int32(legacyW), legacy.Bottom + 20})
 	}
+	app.mouseX, app.mouseY = oldMouseX, oldMouseY
 	if ui2d.active {
 		d2dSetTranslation(0, 0)
 	}
@@ -408,6 +416,11 @@ func handleGraphFullEditorClick(x, y int32) bool {
 	graphSection := app.section
 	app.section = app.graphEditorSection
 	onClick(localX, localY)
+	app.pageAnim, app.subRevealAnim = 1, 1
+	if app.conditionCatalogAnimating {
+		app.conditionCatalogAnim = app.conditionCatalogTarget
+		app.conditionCatalogAnimating = false
+	}
 	resultSection := app.section
 	app.section = graphSection
 	if resultSection == 7 || resultSection == 13 {

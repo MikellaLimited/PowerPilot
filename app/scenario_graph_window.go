@@ -189,6 +189,11 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 	case WM_GETMINMAXINFO:
 		mmi := (*MINMAXINFO)(unsafe.Pointer(lParam))
 		mmi.PtMinTrackSize = POINT{900, 760}
+		if app.settings.GraphWindowSizeLocked {
+			w, h := int32(graphWindowWidth()), int32(graphWindowHeight())
+			mmi.PtMinTrackSize = POINT{w, h}
+			mmi.PtMaxTrackSize = POINT{w, h}
+		}
 		if monitor, _, _ := pMonitorFromWindow.Call(hwnd, MONITOR_DEFAULTTONEAREST); monitor != 0 {
 			info := MONITORINFO{CbSize: uint32(unsafe.Sizeof(MONITORINFO{}))}
 			if ok, _, _ := pGetMonitorInfoW.Call(monitor, uintptr(unsafe.Pointer(&info))); ok != 0 {

@@ -229,6 +229,39 @@ func deleteGraphSelection() bool {
 	return changed
 }
 
+func deleteSelectedGraphEdge() bool {
+	if app.graphSelectedEdgeID == "" {
+		return false
+	}
+	g := ensureCurrentScenarioGraph()
+	for i := len(g.Edges) - 1; i >= 0; i-- {
+		if g.Edges[i].ID == app.graphSelectedEdgeID {
+			g.Edges = append(g.Edges[:i], g.Edges[i+1:]...)
+			app.graphSelectedEdgeID = ""
+			persistCurrentScenarioGraph()
+			invalidateScenarioGraphWindows()
+			return true
+		}
+	}
+	return false
+}
+
+func deleteSelectedGraphNodes() bool {
+	ids := selectedGraphNodeIDs()
+	if len(ids) == 0 {
+		return false
+	}
+	g := ensureCurrentScenarioGraph()
+	for _, id := range ids {
+		g.removeNode(id)
+	}
+	selectOnlyGraphNode("")
+	persistCurrentScenarioGraph()
+	layoutControls(app.hwnd)
+	invalidateScenarioGraphWindows()
+	return true
+}
+
 func copyGraphSelection() bool {
 	g := ensureCurrentScenarioGraph()
 	selected := ensureGraphSelection()
@@ -333,7 +366,6 @@ func beginGraphRightButton(x, y int32) {
 	app.graphRightStartX, app.graphRightStartY = x, y
 	app.graphLastMouseX, app.graphLastMouseY = x, y
 	app.graphContextOpen = false
-	pSetCapture.Call(scenarioGraphInputWindow())
 }
 
 func beginGraphMiddleButton(x, y int32) {
@@ -371,20 +403,7 @@ func finishGraphMiddleButton() bool {
 }
 
 func updateGraphRightButton(x, y int32) bool {
-	if !app.graphRightDown {
-		return false
-	}
-	if !app.graphRightPanning && (absInt(int(x-app.graphRightStartX)) > 4 || absInt(int(y-app.graphRightStartY)) > 4) {
-		app.graphRightPanning = true
-	}
-	if app.graphRightPanning {
-		g := ensureCurrentScenarioGraph()
-		g.ViewX += float64(x-app.graphLastMouseX) / g.Zoom
-		g.ViewY += float64(y-app.graphLastMouseY) / g.Zoom
-	}
-	app.graphLastMouseX, app.graphLastMouseY = x, y
-	invalidateScenarioGraphWindows()
-	return true
+	return false
 }
 
 func finishGraphRightButton(x, y int32) {
@@ -392,12 +411,6 @@ func finishGraphRightButton(x, y int32) {
 		return
 	}
 	app.graphRightDown = false
-	pReleaseCapture.Call()
-	if app.graphRightPanning {
-		app.graphRightPanning = false
-		persistCurrentScenarioGraph()
-		return
-	}
 	nodeHit := false
 	for _, hit := range app.graphNodeHits {
 		if pointIn(hit.Rect, x, y) {
@@ -420,6 +433,9 @@ func finishGraphRightButton(x, y int32) {
 }
 
 func graphContextActions() []string {
+	if app.graphSelectedEdgeID != "" && len(selectedGraphNodeIDs()) > 0 {
+		return []string{"Копировать", "Вырезать", "Дублировать", "Удалить блоки", "Удалить соединение", "Вставить", "Выделить всё", "Вписать схему"}
+	}
 	if app.graphSelectedEdgeID != "" {
 		return []string{"Удалить соединение", "Вписать схему"}
 	}
@@ -474,8 +490,12 @@ func handleGraphContextClick(x, y int32) bool {
 			cutGraphSelection()
 		case "Дублировать":
 			duplicateGraphSelection()
-		case "Удалить", "Удалить соединение":
+		case "Удалить":
 			deleteGraphSelection()
+		case "Удалить блоки":
+			deleteSelectedGraphNodes()
+		case "Удалить соединение":
+			deleteSelectedGraphEdge()
 		case "Вставить":
 			pasteGraphSelection()
 		case "Выделить всё":
