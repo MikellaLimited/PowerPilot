@@ -294,6 +294,25 @@ func graphFullEditorInputIDs(section int) []int {
 	return nil
 }
 
+func allGraphFullEditorInputIDs() []int {
+	return []int{
+		idCondThreshold, idCondHold, idCondText, idCondDelay,
+		idStepValue, idStepText, idStepRetries, idStepDelay,
+		idDelayHours, idDelayMinutes, idDelaySeconds,
+		idExactDay, idExactMonth, idExactYear, idExactHour, idExactMinute,
+		idIdleMinutes, idWatchProcess, idScheduleTime,
+	}
+}
+
+func resetGraphFullEditorInputsToMain() {
+	for _, id := range allGraphFullEditorInputIDs() {
+		if h := app.edits[id]; h != 0 {
+			pShowWindow.Call(h, SW_HIDE)
+			pSetParentGraphEditor.Call(h, app.hwnd)
+		}
+	}
+}
+
 func graphLegacyEditorBody() (RECT, int) {
 	var physical RECT
 	pGetClientRect.Call(app.hwnd, uintptr(unsafe.Pointer(&physical)))
@@ -325,11 +344,7 @@ func prepareGraphFullEditorLayout(body RECT) (RECT, int) {
 	// return them to the coordinate space layoutControls expects before laying
 	// them out again; otherwise every repaint adds graphEditorDX/DY once more and
 	// the fields gradually drift over unrelated controls.
-	for _, id := range graphFullEditorInputIDs(app.graphEditorSection) {
-		if h := app.edits[id]; h != 0 {
-			pSetParentGraphEditor.Call(h, app.hwnd)
-		}
-	}
+	resetGraphFullEditorInputsToMain()
 	oldSection := app.section
 	app.section = app.graphEditorSection
 	layoutControls(app.hwnd)
@@ -357,9 +372,14 @@ func positionGraphFullEditorInputs() {
 		}
 		pSetParentGraphEditor.Call(h, app.graphWindow)
 		dx, dy := scaledInt040(int(app.graphEditorDX)), scaledInt040(int(app.graphEditorDY))
-		pMoveWindow.Call(h, uintptr(int(pt.X)+dx), uintptr(int(pt.Y)+dy), uintptr(wr.Right-wr.Left), uintptr(wr.Bottom-wr.Top), 1)
+		currentH := int(wr.Bottom - wr.Top)
+		fieldH := max(currentH, scaledInt040(26))
+		fieldY := int(pt.Y) + dy - (fieldH-currentH)/2
+		pMoveWindow.Call(h, uintptr(int(pt.X)+dx), uintptr(fieldY), uintptr(wr.Right-wr.Left), uintptr(fieldH), 1)
 		if visible != 0 {
 			pShowWindow.Call(h, SW_SHOW)
+			pInvalidateRect.Call(h, 0, 1)
+			pUpdateWindow.Call(h)
 		} else {
 			pShowWindow.Call(h, SW_HIDE)
 		}
@@ -401,7 +421,7 @@ func drawGraphFullEditor(hdc uintptr, body RECT) {
 }
 
 func closeGraphFullEditor() {
-	for _, id := range graphFullEditorInputIDs(app.graphEditorSection) {
+	for _, id := range allGraphFullEditorInputIDs() {
 		if h := app.edits[id]; h != 0 {
 			pShowWindow.Call(h, SW_HIDE)
 			pSetParentGraphEditor.Call(h, app.hwnd)
