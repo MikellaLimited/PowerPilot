@@ -555,7 +555,12 @@ func scenarioGraphWindowProcActive(hwnd uintptr, msg uint32, wParam, lParam uint
 func paintScenarioGraphWindow(hwnd uintptr) {
 	var ps PAINTSTRUCT
 	hdc, _, _ := pBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
-	defer pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+	paintEnded := false
+	defer func() {
+		if !paintEnded {
+			pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+		}
+	}()
 	var physical RECT
 	pGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&physical)))
 	if physical.Right <= 0 || physical.Bottom <= 0 {
@@ -576,7 +581,9 @@ func paintScenarioGraphWindow(hwnd uintptr) {
 		roundFill(hdc, body, surfacePanelColor(), 18)
 		drawScenarioGraphEditor(hdc, body, int(logical.Right), true)
 		d2dEnd()
-		invalidateVisibleScenarioGraphInputs()
+		pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+		paintEnded = true
+		repaintVisibleScenarioGraphInputs()
 		return
 	}
 	d2dSetBaseScale040(1)
@@ -584,10 +591,12 @@ func paintScenarioGraphWindow(hwnd uintptr) {
 	drawScenarioGraphTitleBar(hdc, logical, hwnd)
 	roundFill(hdc, body, surfacePanelColor(), 18)
 	drawScenarioGraphEditor(hdc, body, int(logical.Right), true)
-	invalidateVisibleScenarioGraphInputs()
+	pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+	paintEnded = true
+	repaintVisibleScenarioGraphInputs()
 }
 
-func invalidateVisibleScenarioGraphInputs() {
+func repaintVisibleScenarioGraphInputs() {
 	if app.graphCloseConfirm {
 		return
 	}
@@ -601,10 +610,12 @@ func invalidateVisibleScenarioGraphInputs() {
 			continue
 		}
 		if visible, _, _ := pIsWindowVisible.Call(edit); visible != 0 {
-			// Queue the child paint after the parent Direct2D frame is complete.
-			// Do not force UpdateWindow here: synchronous repainting was the cause
-			// of the flashing seen while typing.
-			pInvalidateRect.Call(edit, 0, 0)
+			// The parent paint has already ended, so the child is now drawn above
+			// the completed Direct2D frame rather than being overwritten by it.
+			// EN_CHANGE does not repaint the parent, therefore this synchronous
+			// first-frame repair is not repeated for every typed character.
+			pInvalidateRect.Call(edit, 0, 1)
+			pUpdateWindow.Call(edit)
 		}
 	}
 }
