@@ -576,6 +576,7 @@ func paintScenarioGraphWindow(hwnd uintptr) {
 		roundFill(hdc, body, surfacePanelColor(), 18)
 		drawScenarioGraphEditor(hdc, body, int(logical.Right), true)
 		d2dEnd()
+		invalidateVisibleScenarioGraphInputs()
 		return
 	}
 	d2dSetBaseScale040(1)
@@ -583,6 +584,29 @@ func paintScenarioGraphWindow(hwnd uintptr) {
 	drawScenarioGraphTitleBar(hdc, logical, hwnd)
 	roundFill(hdc, body, surfacePanelColor(), 18)
 	drawScenarioGraphEditor(hdc, body, int(logical.Right), true)
+	invalidateVisibleScenarioGraphInputs()
+}
+
+func invalidateVisibleScenarioGraphInputs() {
+	if app.graphCloseConfirm {
+		return
+	}
+	handles := make([]uintptr, 0, len(graphEditorEdits)+2)
+	handles = append(handles, app.graphNameEdit, app.graphEditorText)
+	for _, edit := range graphEditorEdits {
+		handles = append(handles, edit)
+	}
+	for _, edit := range handles {
+		if edit == 0 {
+			continue
+		}
+		if visible, _, _ := pIsWindowVisible.Call(edit); visible != 0 {
+			// Queue the child paint after the parent Direct2D frame is complete.
+			// Do not force UpdateWindow here: synchronous repainting was the cause
+			// of the flashing seen while typing.
+			pInvalidateRect.Call(edit, 0, 0)
+		}
+	}
 }
 
 func drawScenarioGraphTitleBar(hdc uintptr, rc RECT, hwnd uintptr) {
