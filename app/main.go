@@ -269,7 +269,6 @@ const (
 	EN_SETFOCUS     = 0x0100
 	EN_KILLFOCUS    = 0x0200
 	EN_CHANGE       = 0x0300
-	EM_GETSEL       = 0x00B0
 	EM_SETLIMITTEXT = 0x00C5
 	EM_SETSEL       = 0x00B1
 	EM_SETCUEBANNER = 0x1501
@@ -1523,8 +1522,12 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	case WM_DESTROY:
 		if app.graphWindow != 0 {
 			if app.graphEditorOpen {
-				syncGraphCompactText()
-				persistCurrentScenarioGraph()
+				if app.graphEditorSection != 0 {
+					commitGraphFullEditorDraft()
+				} else {
+					syncGraphCompactText()
+					persistCurrentScenarioGraph()
+				}
 			}
 			graphWindow := app.graphWindow
 			app.graphWindow = 0
@@ -1657,6 +1660,10 @@ func layoutControls(hwnd uintptr) {
 	var rc RECT
 	pGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
 	rc = logicalClientRect040(rc)
+	layoutControlsLogical(rc)
+}
+
+func layoutControlsLogical(rc RECT) {
 	w, h := int(rc.Right), int(rc.Bottom)
 	pad, gap := 20, 10
 	contentW := max(1, w-pad*2)
@@ -3141,6 +3148,10 @@ func invalidateVisibleEdits() {
 }
 
 func updateInputVisibility() {
+	if scenarioGraphDetachedInput && app.graphWindow != 0 && app.graphEditorOpen {
+		pInvalidateRect.Call(app.graphWindow, 0, 0)
+		return
+	}
 	if app.hwnd != 0 {
 		layoutControls(app.hwnd)
 	}
@@ -6663,13 +6674,6 @@ func animate() {
 				app.historyScrollPx = app.historyScrollTarget
 			}
 			scrolled = old != app.historyScrollPx
-		case app.graphWindow != 0 && app.graphEditorOpen && app.graphEditorSection == 4:
-			old := app.processScrollPx
-			app.processScrollPx += (app.processScrollTarget - app.processScrollPx) * scrollStep
-			if abs(app.processScrollPx-app.processScrollTarget) < .08 {
-				app.processScrollPx = app.processScrollTarget
-			}
-			scrolled = old != app.processScrollPx
 		case app.section == 4:
 			old := app.processScrollPx
 			app.processScrollPx += (app.processScrollTarget - app.processScrollPx) * scrollStep
@@ -6700,14 +6704,7 @@ func animate() {
 			scrolled = old != app.savedScrollPx
 		}
 		if scrolled {
-			if app.graphWindow != 0 && app.graphEditorOpen && app.graphEditorSection == 4 {
-				oldSection := app.section
-				app.section = 4
-				updateScrollGeometry()
-				app.section = oldSection
-			} else {
-				updateScrollGeometry()
-			}
+			updateScrollGeometry()
 			changed = true
 		}
 	}

@@ -9,10 +9,7 @@ import (
 	"unsafe"
 )
 
-var (
-	pSetParentGraphEditor = user32.NewProc("SetParent")
-	pGetParentGraphEditor = user32.NewProc("GetParent")
-)
+var graphEditorEdits map[int]uintptr
 
 func openGraphCompactEditor(nodeID string, item int) {
 	node := ensureCurrentScenarioGraph().node(nodeID)
@@ -36,6 +33,7 @@ func openGraphCompactEditor(nodeID string, item int) {
 }
 
 func openGraphFullEditor(node *ScenarioGraphNode, item int) {
+	usingDetachedInputs := graphEditorEdits != nil && app.edits[idCondText] == graphEditorEdits[idCondText]
 	oldSection := app.section
 	switch node.Kind {
 	case graphNodeCondition:
@@ -52,9 +50,69 @@ func openGraphFullEditor(node *ScenarioGraphNode, item int) {
 	}
 	app.section = oldSection
 	app.pageAnim = 1
+	ensureGraphFullEditorInputs()
+	copyGraphEditorInputsFromMain(app.graphEditorSection)
+	if !usingDetachedInputs {
+		// Opening is the only point where the main window lends its current values.
+		// Restore its own layout immediately; subsequent editor paints are isolated.
+		layoutControls(app.hwnd)
+	}
 	if app.graphEditorText != 0 {
 		pShowWindow.Call(app.graphEditorText, SW_HIDE)
 	}
+}
+
+func ensureGraphFullEditorInputs() {
+	if app.graphWindow == 0 || len(graphEditorEdits) != 0 {
+		return
+	}
+	graphEditorEdits = make(map[int]uintptr)
+	numeric := map[int]bool{
+		idCondHold: true, idCondDelay: true, idStepValue: true, idStepRetries: true, idStepDelay: true,
+		idDelayHours: true, idDelayMinutes: true, idDelaySeconds: true, idExactDay: true, idExactMonth: true,
+		idExactYear: true, idExactHour: true, idExactMinute: true, idIdleMinutes: true,
+	}
+	leftAligned := map[int]bool{idCondText: true, idStepText: true, idWatchProcess: true}
+	for _, id := range allGraphFullEditorInputIDs() {
+		style := uintptr(WS_CHILD | WS_TABSTOP | ES_CENTER)
+		if leftAligned[id] {
+			style = uintptr(WS_CHILD | WS_TABSTOP | ES_LEFT)
+		}
+		if numeric[id] {
+			style |= ES_NUMBER
+		}
+		h, _, _ := pCreateWindowExW.Call(0, uintptr(unsafe.Pointer(wstr("EDIT"))), uintptr(unsafe.Pointer(wstr(""))), style, 0, 0, 80, 30, app.graphWindow, uintptr(id), 0, 0)
+		if h == 0 {
+			continue
+		}
+		pSendMessageW.Call(h, WM_SETFONT, app.font, 1)
+		graphEditorEdits[id] = h
+	}
+	if h := graphEditorEdits[idCondText]; h != 0 {
+		pSendMessageW.Call(h, EM_SETCUEBANNER, 1, uintptr(unsafe.Pointer(wstr("Введите значение или выберите…"))))
+	}
+	if h := graphEditorEdits[idStepText]; h != 0 {
+		pSendMessageW.Call(h, EM_SETCUEBANNER, 1, uintptr(unsafe.Pointer(wstr("Введите параметр…"))))
+	}
+	if h := graphEditorEdits[idWatchProcess]; h != 0 {
+		pSendMessageW.Call(h, EM_SETCUEBANNER, 1, uintptr(unsafe.Pointer(wstr("Введите имя процесса…"))))
+	}
+}
+
+func copyGraphEditorInputsFromMain(section int) {
+	for _, id := range graphFullEditorInputIDs(section) {
+		if dst, src := graphEditorEdits[id], app.edits[id]; dst != 0 && src != 0 {
+			pSetWindowTextW.Call(dst, uintptr(unsafe.Pointer(wstr(getText(src)))))
+		}
+	}
+}
+
+func withGraphEditorEdits(fn func()) {
+	ensureGraphFullEditorInputs()
+	mainEdits := app.edits
+	app.edits = graphEditorEdits
+	defer func() { app.edits = mainEdits }()
+	fn()
 }
 
 func loadGraphTriggerIntoLegacyEditor(node *ScenarioGraphNode) {
@@ -304,29 +362,19 @@ func allGraphFullEditorInputIDs() []int {
 	}
 }
 
-func resetGraphFullEditorInputsToMain() {
-	for _, id := range allGraphFullEditorInputIDs() {
-		if h := app.edits[id]; h != 0 {
-			pShowWindow.Call(h, SW_HIDE)
-			pSetParentGraphEditor.Call(h, app.hwnd)
-		}
-	}
-}
-
-func graphLegacyEditorBody() (RECT, int) {
-	var physical RECT
-	pGetClientRect.Call(app.hwnd, uintptr(unsafe.Pointer(&physical)))
-	logical := logicalClientRect040(physical)
-	w, h := int(logical.Right), int(logical.Bottom)
+func graphLegacyEditorBody(available RECT) (RECT, int, int) {
+	panelW := minInt(1000, max(620, int(available.Right-available.Left)-32))
+	panelH := minInt(720, max(560, int(available.Bottom-available.Top)-32))
 	top := 110
 	if app.graphEditorSection == 4 && app.processPickerMode != 1 {
 		top = 184
 	}
-	return RECT{20, int32(top), int32(w - 20), int32(h - 20)}, w
+	w, h := panelW+40, panelH+top+20
+	return RECT{20, int32(top), int32(w - 20), int32(h - 20)}, w, h
 }
 
 func prepareGraphFullEditorLayout(body RECT) (RECT, int) {
-	legacy, legacyW := graphLegacyEditorBody()
+	legacy, legacyW, legacyH := graphLegacyEditorBody(body)
 	panelW, panelH := int(legacy.Right-legacy.Left), int(legacy.Bottom-legacy.Top)
 	x := int(body.Left+body.Right)/2 - panelW/2
 	y := int(body.Top+body.Bottom)/2 - panelH/2
@@ -339,73 +387,11 @@ func prepareGraphFullEditorLayout(body RECT) (RECT, int) {
 	app.graphEditorRect = RECT{int32(x), int32(y), int32(x + panelW), int32(y + panelH)}
 	app.graphEditorLegacyBody = legacy
 	app.graphEditorDX, app.graphEditorDY = int32(x)-legacy.Left, int32(y)-legacy.Top
-	graphInputs := make(map[uintptr]bool, len(allGraphFullEditorInputIDs()))
-	for _, id := range allGraphFullEditorInputIDs() {
-		if h := app.edits[id]; h != 0 {
-			graphInputs[h] = true
-		}
-	}
-	type preservedEdit struct {
-		hwnd    uintptr
-		rect    RECT
-		visible bool
-	}
-	preserved := make([]preservedEdit, 0, len(app.edits))
-	for _, h := range app.edits {
-		if h == 0 || graphInputs[h] {
-			continue
-		}
-		var wr RECT
-		pGetWindowRect.Call(h, uintptr(unsafe.Pointer(&wr)))
-		pt := POINT{X: wr.Left, Y: wr.Top}
-		if parent, _, _ := pGetParentGraphEditor.Call(h); parent != 0 {
-			pScreenToClient.Call(parent, uintptr(unsafe.Pointer(&pt)))
-		}
-		visible, _, _ := pIsWindowVisible.Call(h)
-		preserved = append(preserved, preservedEdit{
-			hwnd:    h,
-			rect:    RECT{pt.X, pt.Y, pt.X + wr.Right - wr.Left, pt.Y + wr.Bottom - wr.Top},
-			visible: visible != 0,
-		})
-	}
-	focused, _, _ := pGetFocus.Call()
-	restoreFocus := false
-	selection := uintptr(0)
-	for _, h := range app.edits {
-		if h == focused {
-			restoreFocus = true
-			selection, _, _ = pSendMessageW.Call(focused, EM_GETSEL, 0, 0)
-			break
-		}
-	}
-	// The legacy EDIT controls are shared with the main window. They may already
-	// be children of the detached graph window from the previous paint. Always
-	// return them to the coordinate space layoutControls expects before laying
-	// them out again; otherwise every repaint adds graphEditorDX/DY once more and
-	// the fields gradually drift over unrelated controls.
-	resetGraphFullEditorInputsToMain()
 	oldSection := app.section
 	app.section = app.graphEditorSection
-	layoutControls(app.hwnd)
+	layoutControlsLogical(RECT{0, 0, int32(legacyW), int32(legacyH)})
 	app.section = oldSection
 	positionGraphFullEditorInputs()
-	// layoutControls is reused to calculate the legacy editor geometry, but it must
-	// not hide or move search fields belonging to the still-interactive main window.
-	for _, saved := range preserved {
-		pMoveWindow.Call(saved.hwnd, uintptr(saved.rect.Left), uintptr(saved.rect.Top), uintptr(saved.rect.Right-saved.rect.Left), uintptr(saved.rect.Bottom-saved.rect.Top), 1)
-		if saved.visible {
-			pShowWindow.Call(saved.hwnd, SW_SHOW)
-		} else {
-			pShowWindow.Call(saved.hwnd, SW_HIDE)
-		}
-	}
-	if restoreFocus && focused != 0 {
-		// Reparenting a native EDIT clears its caret. Restore both focus and the
-		// selection after the control returns to the detached editor so typing is
-		// continuous across repaints and live filtering.
-		pSetFocus.Call(focused)
-		pSendMessageW.Call(focused, EM_SETSEL, uintptr(loword(selection)), uintptr(hiword(selection)))
-	}
 	return legacy, legacyW
 }
 
@@ -422,11 +408,7 @@ func positionGraphFullEditorInputs() {
 		var wr RECT
 		pGetWindowRect.Call(h, uintptr(unsafe.Pointer(&wr)))
 		pt := POINT{X: wr.Left, Y: wr.Top}
-		parent, _, _ := pGetParentGraphEditor.Call(h)
-		if parent != 0 {
-			pScreenToClient.Call(parent, uintptr(unsafe.Pointer(&pt)))
-		}
-		pSetParentGraphEditor.Call(h, app.graphWindow)
+		pScreenToClient.Call(app.graphWindow, uintptr(unsafe.Pointer(&pt)))
 		dx, dy := scaledInt040(int(app.graphEditorDX)), scaledInt040(int(app.graphEditorDY))
 		currentH := int(wr.Bottom - wr.Top)
 		fieldH := max(currentH, scaledInt040(26))
@@ -443,6 +425,10 @@ func positionGraphFullEditorInputs() {
 }
 
 func drawGraphFullEditor(hdc uintptr, body RECT) {
+	withGraphEditorEdits(func() { drawGraphFullEditorWithInputs(hdc, body) })
+}
+
+func drawGraphFullEditorWithInputs(hdc uintptr, body RECT) {
 	app.pageAnim, app.subRevealAnim = 1, 1
 	legacy, legacyW := prepareGraphFullEditorLayout(body)
 	if ui2d.active {
@@ -478,19 +464,88 @@ func drawGraphFullEditor(hdc uintptr, body RECT) {
 
 func closeGraphFullEditor() {
 	for _, id := range allGraphFullEditorInputIDs() {
-		if h := app.edits[id]; h != 0 {
+		if h := graphEditorEdits[id]; h != 0 {
 			pShowWindow.Call(h, SW_HIDE)
-			pSetParentGraphEditor.Call(h, app.hwnd)
 		}
 	}
 	app.graphEditorOpen = false
 	app.graphEditorSection = 0
 	app.editingCondition, app.editingStep = -1, -1
-	layoutControls(app.hwnd)
 	invalidateScenarioGraphWindows()
 }
 
+func commitGraphFullEditorDraft() {
+	section := app.graphEditorSection
+	if section == 4 {
+		section = app.processReturnSection
+	}
+	withGraphEditorEdits(func() {
+		switch section {
+		case 8:
+			if v, err := strconv.ParseFloat(strings.ReplaceAll(strings.TrimSpace(getText(app.edits[idCondThreshold])), ",", "."), 64); err == nil {
+				app.conditionDraft.Threshold = v
+			}
+			app.conditionDraft.HoldSeconds = parseInt(getText(app.edits[idCondHold]), 0)
+			app.conditionDraft.Text = strings.TrimSpace(getText(app.edits[idCondText]))
+			app.conditionDraft.DelayAfter = clampInt(parseInt(getText(app.edits[idCondDelay]), app.conditionDraft.DelayAfter), 0, 3600)
+			app.conditionDraft.Enabled = true
+			if app.conditionDraft.ID == "" {
+				app.conditionDraft.ID = newAutomationID("cond")
+			}
+			list := append([]AutomationCondition(nil), currentScenarioConditions()...)
+			if app.editingCondition >= 0 && app.editingCondition < len(list) {
+				list[app.editingCondition] = app.conditionDraft
+			} else if len(list) < 12 {
+				list = append(list, app.conditionDraft)
+			}
+			setCurrentScenarioConditions(list)
+		case 9:
+			if app.stepDraft.Type == stepWait || app.stepDraft.Type == stepSetVolume {
+				app.stepDraft.Value = parseInt(getText(app.edits[idStepValue]), app.stepDraft.Value)
+			}
+			if app.stepDraft.Type == stepRunCommand || app.stepDraft.Type == stepNotify || app.stepDraft.Type == stepProcessPriority {
+				app.stepDraft.Text = strings.TrimSpace(getText(app.edits[idStepText]))
+			}
+			app.stepDraft.Retries = clampInt(parseInt(getText(app.edits[idStepRetries]), app.stepDraft.Retries), 0, 10)
+			app.stepDraft.DelayAfter = clampInt(parseInt(getText(app.edits[idStepDelay]), app.stepDraft.DelayAfter), 0, 3600)
+			if app.stepDraft.ID == "" {
+				app.stepDraft.ID = newAutomationID("step")
+			}
+			list := cloneActionSteps(currentScenarioSteps())
+			if app.editingStep >= 0 && app.editingStep < len(list) {
+				list[app.editingStep] = app.stepDraft
+			} else if len(list) < 12 {
+				list = append(list, app.stepDraft)
+			}
+			setCurrentScenarioSteps(list)
+		case 15:
+			if app.scenarioSavedDraft {
+				syncScenarioWhenFields()
+			} else {
+				app.settings.Mode = app.selectedMode
+				app.settings.DelayHours = parseInt(getText(app.edits[idDelayHours]), app.settings.DelayHours)
+				app.settings.DelayMinutes = parseInt(getText(app.edits[idDelayMinutes]), app.settings.DelayMinutes)
+				app.settings.DelaySeconds = parseInt(getText(app.edits[idDelaySeconds]), app.settings.DelaySeconds)
+				app.settings.Exact = exactFromFields()
+				app.settings.IdleMinutes = parseInt(getText(app.edits[idIdleMinutes]), max(app.settings.IdleMinutes, 1))
+				app.settings.WatchProcess = strings.TrimSpace(getText(app.edits[idWatchProcess]))
+				if v := strings.TrimSpace(getText(app.edits[idScheduleTime])); v != "" {
+					app.settings.Recurrence.TimeHHMM = v
+				}
+			}
+		}
+		syncCurrentGraphFromLegacy()
+		persistCurrentScenarioGraph()
+	})
+}
+
 func handleGraphFullEditorClick(x, y int32) bool {
+	handled := false
+	withGraphEditorEdits(func() { handled = handleGraphFullEditorClickWithInputs(x, y) })
+	return handled
+}
+
+func handleGraphFullEditorClickWithInputs(x, y int32) bool {
 	if app.graphEditorSection == 0 {
 		return false
 	}

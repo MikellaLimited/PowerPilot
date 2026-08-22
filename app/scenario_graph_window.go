@@ -31,6 +31,32 @@ func scenarioGraphEditBrush() uintptr {
 	return graphEditBrush
 }
 
+func advanceDetachedEditorScroll() bool {
+	if !app.graphEditorOpen || app.graphEditorSection != 4 || app.draggingScrollKind != 0 {
+		return false
+	}
+	step := .24
+	if app.settings.AnimationMode == 1 {
+		step = .38
+	}
+	if app.settings.AnimationMode == 2 {
+		step = 1
+	}
+	old := app.processScrollPx
+	app.processScrollPx += (app.processScrollTarget - app.processScrollPx) * step
+	if abs(app.processScrollPx-app.processScrollTarget) < .08 {
+		app.processScrollPx = app.processScrollTarget
+	}
+	if old == app.processScrollPx {
+		return false
+	}
+	oldSection := app.section
+	app.section = 4
+	updateScrollGeometry()
+	app.section = oldSection
+	return true
+}
+
 func openScenarioGraphWindow() {
 	if app.graphWindow != 0 {
 		pShowWindow.Call(app.graphWindow, SW_RESTORE)
@@ -229,8 +255,10 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 		paintScenarioGraphWindow(hwnd)
 		return 0
 	case WM_TIMER:
-		if wParam == scenarioGraphAnimationTimerID && animateConditionCatalog() {
-			pInvalidateRect.Call(hwnd, 0, 0)
+		if wParam == scenarioGraphAnimationTimerID {
+			if animateConditionCatalog() || advanceDetachedEditorScroll() {
+				pInvalidateRect.Call(hwnd, 0, 0)
+			}
 		}
 		return 0
 	case WM_ERASEBKGND:
@@ -241,7 +269,13 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 		pSetTextColor.Call(wParam, uintptr(theme.text))
 		return scenarioGraphEditBrush()
 	case WM_COMMAND:
-		onCommand(loword(wParam), hiword(wParam), lParam)
+		if app.graphEditorOpen && app.graphEditorSection != 0 {
+			// Detached EDIT controls keep their text locally until Save/close. Native
+			// focus and EN_CHANGE notifications must not touch the main window.
+			pInvalidateRect.Call(hwnd, 0, 0)
+		} else {
+			onCommand(loword(wParam), hiword(wParam), lParam)
+		}
 		pInvalidateRect.Call(hwnd, 0, 0)
 		return 0
 	case WM_MOUSEMOVE:
@@ -317,10 +351,10 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 		if app.graphEditorOpen && app.graphEditorSection != 0 {
 			// While a block editor is open, the wheel belongs to its active page
 			// (not to canvas zoom). This also covers the process picker and its list.
-			oldSection := app.section
-			app.section = app.graphEditorSection
-			queueSmoothScroll(delta)
-			app.section = oldSection
+			if app.graphEditorSection == 4 {
+				step := 60.0 * float64(delta) / 120.0
+				app.processScrollTarget = clampFloat(app.processScrollTarget-step, 0, scrollMaxPx(2))
+			}
 			pInvalidateRect.Call(hwnd, 0, 0)
 		} else {
 			zoomScenarioGraph(delta)
@@ -337,6 +371,7 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 	case WM_CLOSE:
 		if app.graphEditorOpen {
 			if app.graphEditorSection != 0 {
+				commitGraphFullEditorDraft()
 				closeGraphFullEditor()
 			} else {
 				syncGraphCompactText()
@@ -353,6 +388,7 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 				graphEditBrush, graphEditBrushColor = 0, 0
 			}
 			app.graphEditorText = 0
+			graphEditorEdits = nil
 			app.graphEditorOpen = false
 			app.graphWindow = 0
 			app.graphDragging = false
