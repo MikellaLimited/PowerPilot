@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"strconv"
 	"syscall"
 	"unsafe"
@@ -121,6 +122,62 @@ func scenarioGraphWindowSize() (int, int) {
 		return 1600, 960
 	default:
 		return 1280, 820
+	}
+}
+
+func layoutScenarioGraphLauncher(body RECT) {
+	for i := range app.graphPaletteRects {
+		app.graphPaletteRects[i] = RECT{}
+	}
+	app.graphCanvasRect = RECT{}
+	cardW := minInt(650, int(body.Right-body.Left)-40)
+	x := int(body.Left+body.Right)/2 - cardW/2
+	y := int(body.Top) + 72
+	app.graphDetachRect = RECT{int32(x + 28), int32(y + 150), int32(x + cardW - 28), int32(y + 196)}
+	app.previewRect = RECT{int32(x + 28), int32(y + 210), int32(x + cardW - 28), int32(y + 250)}
+	if app.scenarioSavedDraft && app.section == 13 {
+		app.savedScenarioNameRect = RECT{int32(x + 28), int32(y + 82), int32(x + cardW - 28), int32(y + 124)}
+		move(app.edits[idTaskName], x+40, y+92, cardW-80, 22)
+		pShowWindow.Call(app.edits[idTaskName], SW_SHOW)
+		app.savedScenarioSaveRect = RECT{int32(x + 28), int32(y + 300), int32(x + cardW/2 - 6), int32(y + 342)}
+		app.savedScenarioCancelRect = RECT{int32(x + cardW/2 + 6), int32(y + 300), int32(x + cardW - 28), int32(y + 342)}
+		app.savedScenarioCheckRect = RECT{}
+	} else {
+		app.savedScenarioNameRect = RECT{}
+		app.savedScenarioSaveRect, app.savedScenarioCancelRect, app.savedScenarioCheckRect = RECT{}, RECT{}, RECT{}
+	}
+}
+
+func drawScenarioGraphLauncher(hdc uintptr, body RECT) {
+	g := ensureCurrentScenarioGraph()
+	cardW := minInt(650, int(body.Right-body.Left)-40)
+	cardH := 370
+	x := int(body.Left+body.Right)/2 - cardW/2
+	y := int(body.Top) + 72
+	card := RECT{int32(x), int32(y), int32(x + cardW), int32(y + cardH)}
+	roundFill(hdc, card, surfacePanelColor(), 18)
+	if ui2d.active {
+		d2dDrawRoundedOutline(card, 18, 1, blendColor(theme.border, theme.accent2, .32))
+	}
+	drawText(hdc, "Продвинутая задача", x+28, y+22, cardW-56, 30, 21, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+	issues := validateScenarioGraph(*g)
+	summary := "Схема готова"
+	if len(issues) > 0 {
+		summary = graphValidationText(issues)
+	}
+	drawText(hdc, fmt.Sprintf("%d блоков · %d соединений", len(g.Nodes), len(g.Edges)), x+28, y+54, cardW-56, 22, 11, 550, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+	if app.scenarioSavedDraft && app.section == 13 {
+		drawText(hdc, "Название задачи", int(app.savedScenarioNameRect.Left), int(app.savedScenarioNameRect.Top)-19, int(app.savedScenarioNameRect.Right-app.savedScenarioNameRect.Left), 17, 10, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		roundFill(hdc, app.savedScenarioNameRect, surfaceButtonColor(), 10)
+	} else {
+		drawText(hdc, "Название можно задать при сохранении задачи", x+28, y+87, cardW-56, 24, 11, 500, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+	}
+	drawButton(hdc, app.graphDetachRect, "Открыть редактор сценария", true)
+	drawButton(hdc, app.previewRect, "Просмотр и проверка", false)
+	drawText(hdc, summary, x+28, y+258, cardW-56, 24, 10, 500, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	if app.scenarioSavedDraft && app.section == 13 {
+		drawButton(hdc, app.savedScenarioSaveRect, "Сохранить изменения", true)
+		drawButton(hdc, app.savedScenarioCancelRect, "Отмена", false)
 	}
 }
 

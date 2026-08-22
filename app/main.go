@@ -1011,7 +1011,7 @@ type App struct {
 	resourceStatsSortDesc                  bool
 	conditionGroupCollapsed                map[string]bool
 	graphCanvasRect                        RECT
-	graphPaletteRects                      [5]RECT
+	graphPaletteRects                      [10]RECT
 	graphZoomRects                         [3]RECT
 	graphNodeHits                          []GraphNodeHit
 	graphPortHits                          []GraphPortHit
@@ -2415,7 +2415,7 @@ func layoutControlsLogical(rc RECT) {
 	if app.section == 7 || app.section == 13 {
 		graphBody := RECT{int32(innerLeft), int32(bodyTop), int32(innerRight), int32(bodyBottom)}
 		if app.graphWindow == 0 {
-			layoutScenarioGraphEditor(graphBody, false)
+			layoutScenarioGraphLauncher(graphBody)
 		} else {
 			layoutScenarioGraphMainPlaceholder(graphBody)
 		}
@@ -4288,7 +4288,7 @@ func drawSafetySettings(hdc uintptr, body RECT) {
 }
 
 func currentScenarioConditions() []AutomationCondition {
-	if n := selectedGraphNode(); n != nil && n.Kind == graphNodeCondition {
+	if n := selectedGraphNode(); n != nil && (n.Kind == graphNodeTrigger || n.Kind == graphNodeCondition) {
 		return n.Conditions
 	}
 	if app.scenarioSavedDraft {
@@ -4411,7 +4411,7 @@ func currentScenarioSteps() []ActionStep {
 	return app.settings.ActionSteps
 }
 func setCurrentScenarioConditions(v []AutomationCondition) {
-	if n := selectedGraphNode(); n != nil && n.Kind == graphNodeCondition {
+	if n := selectedGraphNode(); n != nil && (n.Kind == graphNodeTrigger || n.Kind == graphNodeCondition) {
 		n.Conditions = v
 		persistCurrentScenarioGraph()
 		return
@@ -4585,7 +4585,7 @@ func drawScenarioPage(hdc uintptr, body RECT, w int) {
 		}
 		return
 	}
-	drawScenarioGraphEditor(hdc, body, w, false)
+	drawScenarioGraphLauncher(hdc, body)
 	if app.confirmDiscardScenario {
 		drawScenarioDiscardConfirm(hdc, body)
 	}
@@ -5171,7 +5171,6 @@ func drawConditionEditor(hdc uintptr, body RECT, w int) {
 	// The controls below follow the animated expand button. Do not scan the full
 	// extra-condition geometry here: doing so made the form jump to its final
 	// expanded position on the first animation frame and caused visible blinking.
-	fieldY := int(app.conditionMoreRect.Bottom) + 6
 	if conditionUsesThreshold(app.conditionDraft.Type) {
 		thresholdLabel := "Порог"
 		switch app.conditionDraft.Type {
@@ -5186,9 +5185,9 @@ func drawConditionEditor(hdc uintptr, body RECT, w int) {
 		case condFolderCount:
 			thresholdLabel = "Количество"
 		}
-		drawText(hdc, thresholdLabel, int(body.Left)+18, fieldY, 120, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, thresholdLabel, int(app.whenFieldRect.Left), int(app.whenFieldRect.Top)-22, 160, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		roundFill(hdc, app.whenFieldRect, surfaceButtonColor(), 9)
-		drawText(hdc, "Непрерывно, сек", int(app.warningFieldRect.Left), fieldY, 130, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "Непрерывно, сек", int(app.warningFieldRect.Left), int(app.warningFieldRect.Top)-22, 160, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		roundFill(hdc, app.warningFieldRect, surfaceButtonColor(), 9)
 		comps := []string{"≤", "≥"}
 		for i, r := range app.editorCompareRects {
@@ -5207,16 +5206,15 @@ func drawConditionEditor(hdc uintptr, body RECT, w int) {
 		} else if app.conditionDraft.Type == condDrivePresent {
 			label, leftOpt, rightOpt = "Диск / устройство", "Отключён", "Подключён"
 		}
-		drawText(hdc, label, int(body.Left)+18, fieldY, 200, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, label, int(app.editorCompareRects[0].Left), int(app.editorCompareRects[0].Top)-22, 240, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		drawSelectableButton(hdc, app.editorCompareRects[0], leftOpt, app.conditionDraft.Compare <= 0)
 		drawSelectableButton(hdc, app.editorCompareRects[1], rightOpt, app.conditionDraft.Compare > 0)
-		drawText(hdc, "Непрерывно, сек", int(app.warningFieldRect.Left), fieldY, 130, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "Непрерывно, сек", int(app.warningFieldRect.Left), int(app.warningFieldRect.Top)-22, 160, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		roundFill(hdc, app.warningFieldRect, surfaceButtonColor(), 9)
 	} else {
-		drawText(hdc, "Непрерывно / стабильно, сек", int(app.warningFieldRect.Left), fieldY, 190, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "Непрерывно / стабильно, сек", int(app.warningFieldRect.Left), int(app.warningFieldRect.Top)-22, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		roundFill(hdc, app.warningFieldRect, surfaceButtonColor(), 9)
 	}
-	textY := fieldY + 66
 	label := "Путь к файлу или папке"
 	switch app.conditionDraft.Type {
 	case condProcessExit:
@@ -5242,7 +5240,7 @@ func drawConditionEditor(hdc uintptr, body RECT, w int) {
 			label = "Примечание (необязательно)"
 		}
 	}
-	drawText(hdc, label, int(body.Left)+18, textY, 260, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, label, int(app.timeFieldRects[0].Left), int(app.timeFieldRects[0].Top)-22, max(260, int(app.timeFieldRects[0].Right-app.timeFieldRects[0].Left)), 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	roundFill(hdc, app.timeFieldRects[0], surfaceButtonColor(), 9)
 	if app.conditionDraft.Type == condFileStable {
 		drawButton(hdc, app.editorBrowseRect, "Обзор…", false)
@@ -5299,16 +5297,16 @@ func drawStepEditor(hdc uintptr, body RECT, w int) {
 	fieldY := int(app.stepTypeRects[9].Bottom) + 11
 	switch app.stepDraft.Type {
 	case stepCloseProcesses:
-		drawText(hdc, "Процессы этого шага", int(body.Left)+18, fieldY, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "Процессы этого шага", int(app.editorBrowseRect.Left), int(app.editorBrowseRect.Top)-22, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		drawButton(hdc, app.editorBrowseRect, "Выбрать процессы", false)
 		drawText(hdc, processCountPhrase(len(app.stepDraft.Processes)), int(app.editorBrowseRect.Right)+12, int(app.editorBrowseRect.Top), max(100, int(body.Right-app.editorBrowseRect.Right)-28), int(app.editorBrowseRect.Bottom-app.editorBrowseRect.Top), 10, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	case stepWait:
-		drawText(hdc, "Секунды ожидания", int(body.Left)+18, fieldY, 180, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "Секунды ожидания", int(app.whenFieldRect.Left), int(app.whenFieldRect.Top)-22, 180, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		if app.whenFieldRect.Right > app.whenFieldRect.Left {
 			roundFill(hdc, app.whenFieldRect, surfaceButtonColor(), 9)
 		}
 	case stepSetVolume, stepMute:
-		drawText(hdc, "Громкость", int(body.Left)+18, fieldY, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "Громкость", int(app.powerPlanRects[0].Left), int(app.powerPlanRects[0].Top)-22, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		audioModes := []string{"Задать %", "Выключить звук", "Включить звук"}
 		for i, rr := range app.powerPlanRects {
 			active := (i == 0 && app.stepDraft.Type == stepSetVolume) || (i == 1 && app.stepDraft.Type == stepMute && app.stepDraft.Value != 0) || (i == 2 && app.stepDraft.Type == stepMute && app.stepDraft.Value == 0)
@@ -5321,13 +5319,13 @@ func drawStepEditor(hdc uintptr, body RECT, w int) {
 	case stepLockWorkstation:
 		drawText(hdc, "Windows будет заблокирован, сценарий продолжит работу в фоне.", int(body.Left)+18, fieldY+20, int(body.Right-body.Left)-36, 36, 11, 500, theme.muted, DT_LEFT|DT_VCENTER)
 	case stepPowerPlan:
-		drawText(hdc, "План электропитания", int(body.Left)+18, fieldY, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "План электропитания", int(app.powerPlanRects[0].Left), int(app.powerPlanRects[0].Top)-22, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		planNames := []string{"Энергосбережение", "Сбалансированный", "Высокая производительность"}
 		for i, rr := range app.powerPlanRects {
 			drawSelectableButton(hdc, rr, planNames[i], clampInt(app.stepDraft.Value, 0, 2) == i)
 		}
 	case stepProcessPriority:
-		drawText(hdc, "Процесс и приоритет", int(body.Left)+18, fieldY, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "Процесс и приоритет", int(app.timeFieldRects[0].Left), int(app.timeFieldRects[0].Top)-22, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		if app.timeFieldRects[0].Right > app.timeFieldRects[0].Left {
 			roundFill(hdc, app.timeFieldRects[0], surfaceButtonColor(), 9)
 		}
@@ -5337,7 +5335,7 @@ func drawStepEditor(hdc uintptr, body RECT, w int) {
 			drawSelectableButton(hdc, rr, prioNames[i], clampInt(app.stepDraft.Value, 0, 2) == i)
 		}
 	case stepRunCommand:
-		drawText(hdc, "Команда или программа", int(body.Left)+18, fieldY, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "Команда или программа", int(app.timeFieldRects[0].Left), int(app.timeFieldRects[0].Top)-22, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		if app.timeFieldRects[0].Right > app.timeFieldRects[0].Left {
 			roundFill(hdc, app.timeFieldRects[0], surfaceButtonColor(), 9)
 		}
@@ -5345,7 +5343,7 @@ func drawStepEditor(hdc uintptr, body RECT, w int) {
 			drawButton(hdc, app.editorBrowseRect, "Выбрать файл…", false)
 		}
 	case stepNotify:
-		drawText(hdc, "Текст уведомления", int(body.Left)+18, fieldY, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "Текст уведомления", int(app.timeFieldRects[0].Left), int(app.timeFieldRects[0].Top)-22, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		if app.timeFieldRects[0].Right > app.timeFieldRects[0].Left {
 			roundFill(hdc, app.timeFieldRects[0], surfaceButtonColor(), 9)
 		}
@@ -6479,6 +6477,9 @@ func animateConditionCatalog() bool {
 		app.conditionCatalogAnimating = false
 		if app.section == 8 {
 			positionConditionEditorInputs(true)
+		}
+		if app.graphWindow != 0 && app.graphEditorSection == 8 {
+			positionGraphFullEditorInputs()
 		}
 	}
 	return true
@@ -8922,14 +8923,7 @@ func onClick(x, y int32) {
 				app.conditionCatalogTarget = 0
 			}
 			playUI(clickSound)
-			if scenarioGraphDetachedInput {
-				// The detached editor owns a separate paint/layout cycle. Commit the final
-				// catalogue geometry immediately instead of relying on the hidden main
-				// window to advance or finish this local transition.
-				app.conditionCatalogAnim = app.conditionCatalogTarget
-				app.conditionCatalogFrom = app.conditionCatalogTarget
-				app.conditionCatalogAnimating = false
-			} else if app.settings.AnimationMode == 2 {
+			if app.settings.AnimationMode == 2 {
 				app.conditionCatalogAnim = app.conditionCatalogTarget
 				app.conditionCatalogAnimating = false
 				layoutControls(app.hwnd)

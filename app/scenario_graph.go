@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const scenarioGraphVersion = 1
+const scenarioGraphVersion = 2
 
 const (
 	graphNodeTrigger = iota
@@ -17,6 +17,17 @@ const (
 	graphNodeAction
 	graphNodeWait
 	graphNodeFinish
+	graphNodeLogic
+	graphNodeJunction
+)
+
+const (
+	graphLogicAND = iota
+	graphLogicOR
+	graphLogicNOT
+	graphLogicXOR
+	graphLogicNAND
+	graphLogicNOR
 )
 
 const (
@@ -54,6 +65,7 @@ type ScenarioGraphNode struct {
 	Steps      []ActionStep          `json:"steps,omitempty"`
 	WaitSecs   int                   `json:"wait_seconds,omitempty"`
 	Action     int                   `json:"action,omitempty"`
+	LogicOp    int                   `json:"logic_op,omitempty"`
 }
 
 type ScenarioGraphEdge struct {
@@ -83,7 +95,7 @@ func cloneScenarioGraph(src ScenarioGraph) ScenarioGraph {
 func graphNodeKindName(kind int) string {
 	switch kind {
 	case graphNodeTrigger:
-		return "Триггер"
+		return "Триггер и условия"
 	case graphNodeCondition:
 		return "Условия"
 	case graphNodeAction:
@@ -92,6 +104,10 @@ func graphNodeKindName(kind int) string {
 		return "Ожидание"
 	case graphNodeFinish:
 		return "Завершение"
+	case graphNodeLogic:
+		return "Логика"
+	case graphNodeJunction:
+		return "Соединение"
 	default:
 		return "Блок"
 	}
@@ -99,12 +115,8 @@ func graphNodeKindName(kind int) string {
 
 func graphNodePorts(kind int) []string {
 	switch kind {
-	case graphNodeTrigger, graphNodeWait:
+	case graphNodeTrigger, graphNodeCondition, graphNodeAction, graphNodeWait, graphNodeLogic, graphNodeJunction:
 		return []string{graphPortNext}
-	case graphNodeCondition:
-		return []string{graphPortTrue, graphPortFalse, graphPortError}
-	case graphNodeAction:
-		return []string{graphPortNext, graphPortError}
 	}
 	return nil
 }
@@ -127,6 +139,7 @@ func newScenarioGraphNode(kind int, x, y float64) ScenarioGraphNode {
 	switch kind {
 	case graphNodeTrigger:
 		n.Mode, n.DelayMins = 0, 30
+		n.Conditions = []AutomationCondition{}
 	case graphNodeCondition:
 		n.Conditions = []AutomationCondition{{ID: newAutomationID("cond"), Type: condCPU, Logic: logicAND, Compare: -1, Threshold: 10, HoldSeconds: 30, Enabled: true}}
 	case graphNodeAction:
@@ -135,6 +148,8 @@ func newScenarioGraphNode(kind int, x, y float64) ScenarioGraphNode {
 		n.WaitSecs = 30
 	case graphNodeFinish:
 		n.Action = 4
+	case graphNodeLogic:
+		n.LogicOp = graphLogicAND
 	}
 	return n
 }
@@ -144,35 +159,21 @@ func graphFromLegacy(t TaskState) ScenarioGraph {
 	trigger.Mode = t.Mode
 	trigger.DelayHours, trigger.DelayMins, trigger.DelaySecs = t.DelayHours, t.DelayMinutes, t.DelaySeconds
 	trigger.Exact, trigger.IdleSecs, trigger.Process, trigger.Recurrence = t.Exact, t.IdleMinutes, t.WatchProcess, t.Recurrence
+	trigger.Conditions = append([]AutomationCondition(nil), t.Conditions...)
+	trigger.Logic = t.TriggerLogic
 	finish := newScenarioGraphNode(graphNodeFinish, 800, 160)
 	finish.Action = t.Action
 	g := ScenarioGraph{Version: scenarioGraphVersion, Zoom: 1, Nodes: []ScenarioGraphNode{trigger}}
 	previous := trigger.ID
-	if len(t.Conditions) > 0 {
-		cond := newScenarioGraphNode(graphNodeCondition, 310, 120)
-		cond.Conditions = append([]AutomationCondition(nil), t.Conditions...)
-		cond.Logic = t.TriggerLogic
-		g.Nodes = append(g.Nodes, cond)
-		g.Edges = append(g.Edges, ScenarioGraphEdge{ID: newAutomationID("edge"), From: previous, FromPort: graphPortNext, To: cond.ID})
-		previous = cond.ID
-	}
 	if len(t.Steps) > 0 {
-		action := newScenarioGraphNode(graphNodeAction, 560, 120)
+		action := newScenarioGraphNode(graphNodeAction, 390, 120)
 		action.Steps = cloneActionSteps(t.Steps)
 		g.Nodes = append(g.Nodes, action)
-		port := graphPortNext
-		if len(t.Conditions) > 0 {
-			port = graphPortTrue
-		}
-		g.Edges = append(g.Edges, ScenarioGraphEdge{ID: newAutomationID("edge"), From: previous, FromPort: port, To: action.ID})
+		g.Edges = append(g.Edges, ScenarioGraphEdge{ID: newAutomationID("edge"), From: previous, FromPort: graphPortNext, To: action.ID})
 		previous = action.ID
 	}
 	g.Nodes = append(g.Nodes, finish)
-	port := graphPortNext
-	if len(t.Conditions) > 0 && len(t.Steps) == 0 {
-		port = graphPortTrue
-	}
-	g.Edges = append(g.Edges, ScenarioGraphEdge{ID: newAutomationID("edge"), From: previous, FromPort: port, To: finish.ID})
+	g.Edges = append(g.Edges, ScenarioGraphEdge{ID: newAutomationID("edge"), From: previous, FromPort: graphPortNext, To: finish.ID})
 	return g
 }
 
@@ -188,6 +189,9 @@ func ensureScenarioGraph(g ScenarioGraph, legacy TaskState) ScenarioGraph {
 	if g.Version <= 0 || len(g.Nodes) == 0 {
 		return graphFromLegacy(legacy)
 	}
+	if g.Version < 2 {
+		g = migrateScenarioGraphV2(g)
+	}
 	g.Version = scenarioGraphVersion
 	if g.Zoom < .45 || g.Zoom > 2.2 {
 		g.Zoom = 1
@@ -200,6 +204,57 @@ func ensureScenarioGraph(g ScenarioGraph, legacy TaskState) ScenarioGraph {
 			g.Nodes[i].WaitSecs = 30
 		}
 	}
+	return g
+}
+
+func migrateScenarioGraphV2(g ScenarioGraph) ScenarioGraph {
+	merged := map[string]string{}
+	for _, edge := range g.Edges {
+		from, to := g.node(edge.From), g.node(edge.To)
+		if from != nil && to != nil && from.Kind == graphNodeTrigger && to.Kind == graphNodeCondition && edge.FromPort == graphPortNext && len(from.Conditions) == 0 {
+			from.Conditions = append([]AutomationCondition(nil), to.Conditions...)
+			from.Logic = to.Logic
+			merged[to.ID] = from.ID
+		}
+	}
+	nodes := g.Nodes[:0]
+	for i := range g.Nodes {
+		n := g.Nodes[i]
+		if merged[n.ID] != "" {
+			continue
+		}
+		if n.Kind == graphNodeCondition {
+			n.Kind = graphNodeTrigger
+			n.Mode = 5 // an old standalone condition becomes an immediate gate
+		}
+		nodes = append(nodes, n)
+	}
+	g.Nodes = nodes
+	edges := make([]ScenarioGraphEdge, 0, len(g.Edges))
+	seen := map[string]bool{}
+	for _, edge := range g.Edges {
+		if merged[edge.To] != "" {
+			continue
+		}
+		if replacement := merged[edge.From]; replacement != "" {
+			if edge.FromPort == graphPortFalse || edge.FromPort == graphPortError {
+				continue
+			}
+			edge.From = replacement
+		}
+		if edge.FromPort == graphPortFalse || edge.FromPort == graphPortError {
+			continue
+		}
+		edge.FromPort = graphPortNext
+		key := edge.From + "\x00" + edge.To
+		if edge.From == edge.To || seen[key] {
+			continue
+		}
+		seen[key] = true
+		edges = append(edges, edge)
+	}
+	g.Edges = edges
+	g.Version = scenarioGraphVersion
 	return g
 }
 
@@ -247,13 +302,22 @@ func (g *ScenarioGraph) outgoing(from, port string) *ScenarioGraphEdge {
 	return nil
 }
 
+func (g *ScenarioGraph) outgoingAll(from, port string) []ScenarioGraphEdge {
+	out := []ScenarioGraphEdge{}
+	for _, edge := range g.Edges {
+		if edge.From == from && edge.FromPort == port {
+			out = append(out, edge)
+		}
+	}
+	return out
+}
+
 func (g *ScenarioGraph) connect(from, port, to string) {
 	if from == "" || to == "" || from == to || g.node(from) == nil || g.node(to) == nil {
 		return
 	}
 	for i := range g.Edges {
-		if g.Edges[i].From == from && g.Edges[i].FromPort == port {
-			g.Edges[i].To = to
+		if g.Edges[i].From == from && g.Edges[i].FromPort == port && g.Edges[i].To == to {
 			return
 		}
 	}
@@ -294,8 +358,8 @@ func validateScenarioGraph(g ScenarioGraph) []GraphValidationIssue {
 		if n.Kind == graphNodeFinish {
 			finishes++
 		}
-		if n.Kind == graphNodeCondition && len(n.Conditions) == 0 {
-			issues = append(issues, GraphValidationIssue{1, n.ID, "Блок условий пуст"})
+		if n.Kind == graphNodeLogic && (n.LogicOp < graphLogicAND || n.LogicOp > graphLogicNOR) {
+			issues = append(issues, GraphValidationIssue{2, n.ID, "В логическом блоке выбрана неизвестная операция"})
 		}
 		if n.Kind == graphNodeAction && len(n.Steps) == 0 {
 			issues = append(issues, GraphValidationIssue{1, n.ID, "Блок действий пуст"})
@@ -307,14 +371,14 @@ func validateScenarioGraph(g ScenarioGraph) []GraphValidationIssue {
 			issues = append(issues, GraphValidationIssue{2, n.ID, "В блоке завершения не выбрано действие"})
 		}
 	}
-	if triggers != 1 {
-		issues = append(issues, GraphValidationIssue{2, "", "В первой версии схемы должен быть ровно один триггер"})
+	if triggers == 0 {
+		issues = append(issues, GraphValidationIssue{2, "", "Добавьте хотя бы один блок «Триггер и условия»"})
 	}
 	if finishes == 0 {
 		issues = append(issues, GraphValidationIssue{2, "", "Добавьте хотя бы один блок завершения"})
 	}
-	outgoing := map[string]bool{}
 	adj := map[string][]string{}
+	incoming := map[string]int{}
 	for _, e := range g.Edges {
 		if ids[e.From].ID == "" || ids[e.To].ID == "" {
 			issues = append(issues, GraphValidationIssue{2, e.From, "Соединение указывает на отсутствующий блок"})
@@ -330,20 +394,27 @@ func validateScenarioGraph(g ScenarioGraph) []GraphValidationIssue {
 		if !validPort {
 			issues = append(issues, GraphValidationIssue{2, e.From, "Соединение использует недоступный выход блока"})
 		}
-		key := e.From + "\x00" + e.FromPort
-		if outgoing[key] {
-			issues = append(issues, GraphValidationIssue{2, e.From, "Один выход соединён с несколькими блоками"})
-		}
-		outgoing[key] = true
 		adj[e.From] = append(adj[e.From], e.To)
+		incoming[e.To]++
 	}
-	var triggerID string
+	for _, n := range g.Nodes {
+		if n.Kind == graphNodeLogic {
+			need := 2
+			if n.LogicOp == graphLogicNOT {
+				need = 1
+			}
+			if incoming[n.ID] < need {
+				issues = append(issues, GraphValidationIssue{1, n.ID, fmt.Sprintf("Логическому блоку нужно минимум %d входа", need)})
+			}
+		}
+	}
+	triggerIDs := []string{}
 	for _, n := range g.Nodes {
 		if n.Kind == graphNodeTrigger {
-			triggerID = n.ID
+			triggerIDs = append(triggerIDs, n.ID)
 		}
 	}
-	if triggerID != "" {
+	if len(triggerIDs) > 0 {
 		reachable := map[string]bool{}
 		var visit func(string)
 		visit = func(id string) {
@@ -355,7 +426,9 @@ func validateScenarioGraph(g ScenarioGraph) []GraphValidationIssue {
 				visit(next)
 			}
 		}
-		visit(triggerID)
+		for _, triggerID := range triggerIDs {
+			visit(triggerID)
+		}
 		for _, n := range g.Nodes {
 			if !reachable[n.ID] {
 				issues = append(issues, GraphValidationIssue{1, n.ID, "Блок недостижим от триггера"})
@@ -401,6 +474,9 @@ func graphLegacyState(g ScenarioGraph, base TaskState) TaskState {
 	out.Steps = nil
 	for _, n := range nodes {
 		switch n.Kind {
+		case graphNodeTrigger:
+			out.Conditions = append(out.Conditions, n.Conditions...)
+			out.TriggerLogic = n.Logic
 		case graphNodeCondition:
 			out.Conditions = append(out.Conditions, n.Conditions...)
 			out.TriggerLogic = n.Logic
@@ -419,7 +495,10 @@ func graphNodeSummary(n ScenarioGraphNode) string {
 	}
 	switch n.Kind {
 	case graphNodeTrigger:
-		return graphTriggerSummary(n)
+		if len(n.Conditions) == 0 {
+			return graphTriggerSummary(n)
+		}
+		return fmt.Sprintf("%s · %d усл.", graphTriggerSummary(n), len(n.Conditions))
 	case graphNodeCondition:
 		if len(n.Conditions) == 0 {
 			return "Добавьте условия"
@@ -440,8 +519,20 @@ func graphNodeSummary(n ScenarioGraphNode) string {
 		return "Пауза " + formatDuration(time.Duration(max(n.WaitSecs, 1))*time.Second)
 	case graphNodeFinish:
 		return powerActionName(n.Action)
+	case graphNodeLogic:
+		return graphLogicName(n.LogicOp)
+	case graphNodeJunction:
+		return "Слияние проводов"
 	}
 	return ""
+}
+
+func graphLogicName(op int) string {
+	names := []string{"И", "ИЛИ", "НЕ", "Исключающее ИЛИ", "НЕ-И", "НЕ-ИЛИ"}
+	if op >= 0 && op < len(names) {
+		return names[op]
+	}
+	return "Логика"
 }
 
 func graphTriggerSummary(n ScenarioGraphNode) string {
@@ -471,66 +562,128 @@ func scenarioGraphValidationError(g ScenarioGraph) string {
 	return ""
 }
 
-// executeScenarioGraph walks the connected blocks instead of flattening the
-// diagram into the old condition/action lists. This keeps branches meaningful:
-// a condition selects Да/Нет, while a failed action may follow Ошибка.
+// executeScenarioGraph evaluates the acyclic diagram as a data-flow graph.
+// Every wire carries a boolean signal. This permits fan-out, fan-in and
+// variable-input logic blocks without inventing hidden execution branches.
 func executeScenarioGraph(s Schedule) (int, bool) {
 	g := cloneScenarioGraph(s.graph)
-	trigger := g.trigger()
-	if trigger == nil {
+	if scenarioGraphValidationError(g) != "" {
 		return s.action, false
 	}
-	next := func(nodeID, port string) string {
-		if edge := g.outgoing(nodeID, port); edge != nil {
-			return edge.To
-		}
-		return ""
+	nodes := map[string]*ScenarioGraphNode{}
+	indegree := map[string]int{}
+	incoming := map[string][]string{}
+	adj := map[string][]string{}
+	for i := range g.Nodes {
+		nodes[g.Nodes[i].ID] = &g.Nodes[i]
+		indegree[g.Nodes[i].ID] = 0
 	}
-	nodeID := next(trigger.ID, graphPortNext)
-	for visited := 0; nodeID != "" && visited < 256; visited++ {
-		node := g.node(nodeID)
-		if node == nil {
-			return s.action, false
+	for _, edge := range g.Edges {
+		if nodes[edge.From] == nil || nodes[edge.To] == nil {
+			continue
+		}
+		adj[edge.From] = append(adj[edge.From], edge.To)
+		incoming[edge.To] = append(incoming[edge.To], edge.From)
+		indegree[edge.To]++
+	}
+	queue := make([]string, 0, len(g.Nodes))
+	for _, node := range g.Nodes {
+		if indegree[node.ID] == 0 {
+			queue = append(queue, node.ID)
+		}
+	}
+	topo := make([]string, 0, len(g.Nodes))
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		topo = append(topo, id)
+		for _, to := range adj[id] {
+			indegree[to]--
+			if indegree[to] == 0 {
+				queue = append(queue, to)
+			}
+		}
+	}
+	if len(topo) != len(g.Nodes) {
+		return s.action, false
+	}
+	signals := map[string]bool{}
+	resultAction, finished := s.action, false
+	for _, id := range topo {
+		node := nodes[id]
+		inputs := make([]bool, 0, len(incoming[id]))
+		for _, from := range incoming[id] {
+			inputs = append(inputs, signals[from])
+		}
+		inputAny := len(inputs) == 0 && node.Kind == graphNodeTrigger
+		for _, value := range inputs {
+			inputAny = inputAny || value
 		}
 		appendRunHistory("GRAPH_NODE", graphNodeKindName(node.Kind)+" · "+graphNodeSummary(*node), s.runID)
 		switch node.Kind {
 		case graphNodeTrigger:
-			nodeID = next(node.ID, graphPortNext)
+			ok, _ := evaluateAutomationConditions(node.Conditions)
+			signals[id] = inputAny && ok
 		case graphNodeCondition:
 			ok, _ := evaluateAutomationConditions(node.Conditions)
-			if ok {
-				nodeID = next(node.ID, graphPortTrue)
-				continue
-			}
-			if branch := next(node.ID, graphPortFalse); branch != "" {
-				nodeID = branch
-				continue
-			}
-			// A condition with only a Да output behaves like the legacy scheduler:
-			// it waits instead of treating a temporary false value as an error.
-			for !ok {
-				time.Sleep(250 * time.Millisecond)
-				ok, _ = evaluateAutomationConditions(node.Conditions)
-			}
-			nodeID = next(node.ID, graphPortTrue)
+			signals[id] = inputAny && ok
+		case graphNodeLogic:
+			signals[id] = evaluateGraphLogic(node.LogicOp, inputs)
+		case graphNodeJunction:
+			signals[id] = inputAny
 		case graphNodeAction:
+			if !inputAny {
+				signals[id] = false
+				continue
+			}
 			stepSchedule := s
 			stepSchedule.steps = cloneActionSteps(node.Steps)
-			if executeScenarioSteps(stepSchedule) {
-				nodeID = next(node.ID, graphPortNext)
-			} else if branch := next(node.ID, graphPortError); branch != "" {
-				nodeID = branch
-			} else {
-				return s.action, false
-			}
+			signals[id] = executeScenarioSteps(stepSchedule)
 		case graphNodeWait:
-			time.Sleep(time.Duration(max(node.WaitSecs, 1)) * time.Second)
-			nodeID = next(node.ID, graphPortNext)
+			if inputAny {
+				time.Sleep(time.Duration(max(node.WaitSecs, 1)) * time.Second)
+			}
+			signals[id] = inputAny
 		case graphNodeFinish:
-			return node.Action, true
+			if inputAny && !finished {
+				resultAction, finished = node.Action, true
+			}
+			signals[id] = inputAny
 		default:
-			return s.action, false
+			signals[id] = false
 		}
 	}
-	return s.action, false
+	return resultAction, finished
+}
+
+func evaluateGraphLogic(op int, inputs []bool) bool {
+	switch op {
+	case graphLogicAND, graphLogicNAND:
+		value := len(inputs) > 0
+		for _, input := range inputs {
+			value = value && input
+		}
+		if op == graphLogicNAND {
+			return !value
+		}
+		return value
+	case graphLogicOR, graphLogicNOR:
+		value := false
+		for _, input := range inputs {
+			value = value || input
+		}
+		if op == graphLogicNOR {
+			return !value
+		}
+		return value
+	case graphLogicNOT:
+		return len(inputs) > 0 && !inputs[0]
+	case graphLogicXOR:
+		value := false
+		for _, input := range inputs {
+			value = value != input
+		}
+		return value
+	}
+	return false
 }

@@ -304,9 +304,6 @@ func pasteGraphSelection() bool {
 	}
 	selectOnlyGraphNode("")
 	for _, source := range scenarioGraphClipboard.Nodes {
-		if source.Kind == graphNodeTrigger && g.trigger() != nil {
-			continue
-		}
 		node := cloneScenarioGraph(ScenarioGraph{Nodes: []ScenarioGraphNode{source}}).Nodes[0]
 		oldID := node.ID
 		node.ID = newAutomationID("node")

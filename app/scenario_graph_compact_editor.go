@@ -62,6 +62,26 @@ func openGraphFullEditor(node *ScenarioGraphNode, item int) {
 	}
 }
 
+func openGraphConditionEditor(nodeID string, item int) {
+	node := ensureCurrentScenarioGraph().node(nodeID)
+	if node == nil || (node.Kind != graphNodeTrigger && node.Kind != graphNodeCondition) {
+		return
+	}
+	selectOnlyGraphNode(nodeID)
+	app.graphEditorOpen = true
+	app.graphEditorNodeID = nodeID
+	app.graphEditorItem = max(item, 0)
+	oldSection := app.section
+	openConditionEditor(item)
+	app.graphEditorSection = 8
+	app.section = oldSection
+	app.pageAnim = 1
+	ensureGraphFullEditorInputs()
+	copyGraphEditorInputsFromMain(8)
+	layoutControls(app.hwnd)
+	invalidateScenarioGraphWindows()
+}
+
 func ensureGraphFullEditorInputs() {
 	if app.graphWindow == 0 || len(graphEditorEdits) != 0 {
 		return
@@ -219,7 +239,11 @@ func handleGraphDoubleClick(x, y int32) bool {
 	}
 	for _, function := range app.graphFunctionHits {
 		if pointIn(function.Rect, x, y) {
-			openGraphCompactEditor(function.NodeID, function.Index)
+			if function.Kind == 1 {
+				openGraphConditionEditor(function.NodeID, function.Index)
+			} else {
+				openGraphCompactEditor(function.NodeID, function.Index)
+			}
 			return true
 		}
 	}
@@ -411,8 +435,8 @@ func positionGraphFullEditorInputs() {
 		pScreenToClient.Call(app.graphWindow, uintptr(unsafe.Pointer(&pt)))
 		dx, dy := scaledInt040(int(app.graphEditorDX)), scaledInt040(int(app.graphEditorDY))
 		currentH := int(wr.Bottom - wr.Top)
-		fieldH := max(currentH, scaledInt040(26))
-		fieldY := int(pt.Y) + dy - (fieldH-currentH)/2
+		fieldH := currentH
+		fieldY := int(pt.Y) + dy
 		pMoveWindow.Call(h, uintptr(int(pt.X)+dx), uintptr(fieldY), uintptr(wr.Right-wr.Left), uintptr(fieldH), 1)
 		if visible != 0 {
 			pShowWindow.Call(h, SW_SHOW)
@@ -566,33 +590,10 @@ func handleGraphFullEditorClickWithInputs(x, y int32) bool {
 		app.graphEditorSection = resultSection
 	}
 	if openConditions {
-		// In the block editor "По условиям" is an entry point, not a dead-end
-		// trigger option: keep the selected trigger mode and immediately reveal the
-		// condition block editor. Reuse an existing block or create the first one.
+		// Timing and conditions are two views of the same combined block.
 		syncScenarioWhenFields()
 		syncCurrentGraphFromLegacy()
-		g := ensureCurrentScenarioGraph()
-		var condition *ScenarioGraphNode
-		for i := range g.Nodes {
-			if g.Nodes[i].Kind == graphNodeCondition {
-				condition = &g.Nodes[i]
-				break
-			}
-		}
-		if condition == nil && len(g.Nodes) < 64 {
-			trigger := g.trigger()
-			x, y := 320.0, 180.0
-			if trigger != nil {
-				x, y = trigger.X+300, trigger.Y
-			}
-			n := newScenarioGraphNode(graphNodeCondition, x, y)
-			g.Nodes = append(g.Nodes, n)
-			condition = &g.Nodes[len(g.Nodes)-1]
-		}
-		if condition != nil {
-			persistCurrentScenarioGraph()
-			openGraphCompactEditor(condition.ID, 0)
-		}
+		openGraphConditionEditor(app.graphEditorNodeID, -1)
 	}
 	invalidateScenarioGraphWindows()
 	return true
