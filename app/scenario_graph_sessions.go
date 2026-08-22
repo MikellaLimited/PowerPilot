@@ -3,7 +3,11 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"reflect"
+	"strings"
+	"time"
 	"unsafe"
 )
 
@@ -12,6 +16,12 @@ type scenarioGraphSession struct {
 	Graph       ScenarioGraph
 	TargetID    string
 	SavedTask   bool
+	TaskName    string
+	Undo        []ScenarioGraph
+	Redo        []ScenarioGraph
+	Current     ScenarioGraph
+	Fingerprint string
+	Applying    bool
 	UI          App
 	EditorEdits map[int]uintptr
 	Closed      bool
@@ -79,6 +89,73 @@ func currentScenarioGraphSession() *scenarioGraphSession {
 	return activeScenarioGraphSession
 }
 
+func scenarioGraphFingerprint(graph ScenarioGraph) string {
+	data, _ := json.Marshal(graph)
+	return string(data)
+}
+
+func (session *scenarioGraphSession) observeGraphChange() {
+	if session == nil || session.Applying {
+		return
+	}
+	fingerprint := scenarioGraphFingerprint(session.Graph)
+	if fingerprint == session.Fingerprint {
+		return
+	}
+	session.Undo = append(session.Undo, cloneScenarioGraph(session.Current))
+	if len(session.Undo) > 100 {
+		session.Undo = session.Undo[len(session.Undo)-100:]
+	}
+	session.Redo = nil
+	session.Current = cloneScenarioGraph(session.Graph)
+	session.Fingerprint = fingerprint
+}
+
+func undoCurrentScenarioGraph() bool {
+	session := currentScenarioGraphSession()
+	if session == nil || len(session.Undo) == 0 {
+		return false
+	}
+	previous := session.Undo[len(session.Undo)-1]
+	session.Undo = session.Undo[:len(session.Undo)-1]
+	session.Redo = append(session.Redo, cloneScenarioGraph(session.Graph))
+	session.Applying = true
+	session.Graph = cloneScenarioGraph(previous)
+	session.Current = cloneScenarioGraph(previous)
+	session.Fingerprint = scenarioGraphFingerprint(previous)
+	session.Applying = false
+	selectOnlyGraphNode("")
+	invalidateScenarioGraphWindows()
+	return true
+}
+
+func redoCurrentScenarioGraph() bool {
+	session := currentScenarioGraphSession()
+	if session == nil || len(session.Redo) == 0 {
+		return false
+	}
+	next := session.Redo[len(session.Redo)-1]
+	session.Redo = session.Redo[:len(session.Redo)-1]
+	session.Undo = append(session.Undo, cloneScenarioGraph(session.Graph))
+	session.Applying = true
+	session.Graph = cloneScenarioGraph(next)
+	session.Current = cloneScenarioGraph(next)
+	session.Fingerprint = scenarioGraphFingerprint(next)
+	session.Applying = false
+	selectOnlyGraphNode("")
+	invalidateScenarioGraphWindows()
+	return true
+}
+
+func syncScenarioGraphSessionName(session *scenarioGraphSession) {
+	if session == nil || app.graphNameEdit == 0 {
+		return
+	}
+	if name := strings.TrimSpace(getText(app.graphNameEdit)); name != "" {
+		session.TaskName = name
+	}
+}
+
 func scenarioGraphTargetID() (string, bool) {
 	if app.scenarioSavedDraft && app.savedEditDraft.ID != "" {
 		return app.savedEditDraft.ID, true
@@ -108,6 +185,9 @@ func saveScenarioGraphSession(session *scenarioGraphSession) {
 			}
 			state := graphLegacyState(graph, taskStateFromSaved040(app.settings.SavedTasks[i]))
 			applyTaskStateToSavedGraph(&app.settings.SavedTasks[i], state, graph)
+			if strings.TrimSpace(session.TaskName) != "" {
+				app.settings.SavedTasks[i].Name = strings.TrimSpace(session.TaskName)
+			}
 			if app.savedEditDraft.ID == session.TargetID {
 				app.savedEditDraft = app.settings.SavedTasks[i]
 			}
@@ -127,6 +207,37 @@ func saveScenarioGraphSession(session *scenarioGraphSession) {
 	saveDraftAutosave()
 }
 
+func saveScenarioGraphTaskSession(session *scenarioGraphSession) bool {
+	if session == nil {
+		return false
+	}
+	syncScenarioGraphSessionName(session)
+	graph := ensureScenarioGraph(cloneScenarioGraph(session.Graph), TaskState{})
+	if reason := scenarioGraphValidationError(graph); reason != "" {
+		showNotification("PowerPilot", "Схему пока нельзя сохранить: "+reason)
+		return false
+	}
+	if session.SavedTask {
+		saveScenarioGraphSession(session)
+		showNotification("PowerPilot", "Изменения задачи сохранены.")
+		return true
+	}
+	state := graphLegacyState(graph, legacyTaskStateFromSettings(app.settings))
+	name := strings.TrimSpace(session.TaskName)
+	if name == "" || name == "Новая задача" {
+		name = fmt.Sprintf("Задача %d", len(app.settings.SavedTasks)+1)
+	}
+	task := SavedTask{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Name: name, TaskKind: 1}
+	applyTaskStateToSavedGraph(&task, state, graph)
+	app.settings.SavedTasks = append(app.settings.SavedTasks, task)
+	session.TargetID, session.SavedTask, session.TaskName = task.ID, true, task.Name
+	saveSettings()
+	maintainWakeTimer(time.Now())
+	appendHistory("SAVE", task.Name)
+	showNotification("PowerPilot", "Задача сохранена: "+task.Name)
+	return true
+}
+
 func applyTaskStateToSavedGraph(task *SavedTask, state TaskState, graph ScenarioGraph) {
 	if task == nil {
 		return
@@ -136,6 +247,8 @@ func applyTaskStateToSavedGraph(task *SavedTask, state TaskState, graph Scenario
 	task.Exact, task.IdleMinutes, task.WatchProcess = state.Exact, state.IdleMinutes, state.WatchProcess
 	task.Conditions = append([]AutomationCondition(nil), state.Conditions...)
 	task.Steps = cloneActionSteps(state.Steps)
+	task.WarningSeconds = state.WarningSeconds
+	task.TaskKind = 1
 	task.TriggerLogic, task.Recurrence, task.Graph = state.TriggerLogic, state.Recurrence, graph
 }
 

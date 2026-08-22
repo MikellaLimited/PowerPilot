@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -92,13 +93,25 @@ func openScenarioGraphWindow() {
 		return
 	}
 	targetID, saved := scenarioGraphTargetID()
-	session := &scenarioGraphSession{HWND: hwnd, Graph: cloneScenarioGraph(*ensureCurrentScenarioGraph()), TargetID: targetID, SavedTask: saved}
+	graph := cloneScenarioGraph(*ensureCurrentScenarioGraph())
+	taskName := strings.TrimSpace(getText(app.edits[idTaskName]))
+	if saved && strings.TrimSpace(app.savedEditDraft.Name) != "" {
+		taskName = strings.TrimSpace(app.savedEditDraft.Name)
+	}
+	if taskName == "" {
+		taskName = "Новая задача"
+	}
+	session := &scenarioGraphSession{HWND: hwnd, Graph: graph, TargetID: targetID, SavedTask: saved, TaskName: taskName, Current: cloneScenarioGraph(graph), Fingerprint: scenarioGraphFingerprint(graph)}
 	copyGraphSessionUI(&session.UI, &app)
 	session.UI.graphWindow = hwnd
 	session.UI.graphSelectedNodes = map[string]bool{}
 	session.UI.graphSelectedNodeID, session.UI.graphSelectedEdgeID = "", ""
 	session.UI.graphEditorOpen, session.UI.graphContextOpen = false, false
 	scenarioGraphSessions[hwnd] = session
+	withScenarioGraphSession(hwnd, func() uintptr {
+		ensureScenarioGraphNameEdit(taskName)
+		return 0
+	})
 	app.graphWindow = hwnd
 	pSetTimer.Call(hwnd, scenarioGraphAnimationTimerID, 10, 0)
 	app.graphTitleHover = -1
@@ -112,6 +125,18 @@ func openScenarioGraphWindow() {
 	pSetForegroundWindowGraph.Call(hwnd)
 	layoutControls(app.hwnd)
 	invalidateScenarioGraphWindows()
+}
+
+func ensureScenarioGraphNameEdit(name string) {
+	if app.graphWindow == 0 || app.graphNameEdit != 0 {
+		return
+	}
+	hwnd, _, _ := pCreateWindowExW.Call(0, uintptr(unsafe.Pointer(wstr("EDIT"))), uintptr(unsafe.Pointer(wstr(name))), WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_CENTER, 0, 0, 260, 30, app.graphWindow, 9902, 0, 0)
+	app.graphNameEdit = hwnd
+	if hwnd != 0 {
+		pSendMessageW.Call(hwnd, WM_SETFONT, app.font, 1)
+		pSendMessageW.Call(hwnd, EM_SETCUEBANNER, 1, uintptr(unsafe.Pointer(wstr("Название задачи"))))
+	}
 }
 
 func scenarioGraphWindowSize() (int, int) {
@@ -459,6 +484,9 @@ func scenarioGraphWindowProcActive(hwnd uintptr, msg uint32, wParam, lParam uint
 			return 0
 		}
 	case WM_CLOSE:
+		if session := currentScenarioGraphSession(); session != nil {
+			syncScenarioGraphSessionName(session)
+		}
 		if app.graphEditorOpen {
 			if app.graphEditorSection != 0 {
 				commitGraphFullEditorDraft()
@@ -475,12 +503,16 @@ func scenarioGraphWindowProcActive(hwnd uintptr, msg uint32, wParam, lParam uint
 		if app.graphEditorText != 0 {
 			pDestroyWindow.Call(app.graphEditorText)
 		}
+		if app.graphNameEdit != 0 {
+			pDestroyWindow.Call(app.graphNameEdit)
+		}
 		for _, edit := range graphEditorEdits {
 			if edit != 0 {
 				pDestroyWindow.Call(edit)
 			}
 		}
 		app.graphEditorText = 0
+		app.graphNameEdit = 0
 		graphEditorEdits = nil
 		app.graphEditorOpen = false
 		app.graphDragging = false

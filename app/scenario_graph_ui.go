@@ -62,6 +62,7 @@ func ensureCurrentScenarioGraph() *ScenarioGraph {
 
 func persistCurrentScenarioGraph() {
 	if session := currentScenarioGraphSession(); session != nil {
+		session.observeGraphChange()
 		invalidateScenarioGraphWindows()
 		return
 	}
@@ -171,7 +172,8 @@ func layoutScenarioGraphEditor(body RECT, detached bool) {
 		app.savedScenarioCheckRect = RECT{int32(btnLeft + btnW*2 + gap*2), int32(footerY), int32(right), int32(footerY + 36)}
 		bottom = footerY - 12
 	}
-	app.previewRect = RECT{body.Right - 126, body.Top + 12, body.Right - 14, body.Top + 46}
+	app.graphSaveRect = RECT{body.Right - 112, body.Top + 12, body.Right - 14, body.Top + 46}
+	app.previewRect = RECT{body.Right - 220, body.Top + 12, body.Right - 122, body.Top + 46}
 	if !detached {
 		app.graphDetachRect = RECT{body.Right - 310, body.Top + 12, body.Right - 136, body.Top + 46}
 	}
@@ -185,6 +187,12 @@ func layoutScenarioGraphEditor(body RECT, detached bool) {
 		x := paletteLeft + i*(paletteW+paletteGap)
 		app.graphPaletteRects[i] = RECT{int32(x), int32(paletteTop), int32(x + paletteW), int32(paletteTop + 30)}
 	}
+	nameLeft := int(app.graphPaletteRects[len(app.graphPaletteRects)-1].Right) + 14
+	nameRight := int(app.previewRect.Left) - 14
+	if nameRight < nameLeft+180 {
+		nameLeft = max(left, nameRight-180)
+	}
+	app.graphNameRect = RECT{int32(nameLeft), body.Top + 12, int32(nameRight), body.Top + 46}
 	zoomWidths := []int{36, 36, 78}
 	zoomX := right - 162
 	for i, width := range zoomWidths {
@@ -277,12 +285,17 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	app.graphNodeHits = app.graphNodeHits[:0]
 	app.graphPortHits = app.graphPortHits[:0]
 	app.graphFunctionHits = app.graphFunctionHits[:0]
-	titleX := int(body.Left) + 18
-	if last := app.graphPaletteRects[len(app.graphPaletteRects)-1]; last.Right > 0 {
-		titleX = int(last.Right) + 12
+	roundFill(hdc, app.graphNameRect, surfaceButtonColor(), 9)
+	if app.graphNameEdit != 0 {
+		move(app.graphNameEdit, int(app.graphNameRect.Left)+8, int(app.graphNameRect.Top)+6, max(20, int(app.graphNameRect.Right-app.graphNameRect.Left)-16), 22)
+		if app.graphEditorOpen {
+			pShowWindow.Call(app.graphNameEdit, SW_HIDE)
+		} else {
+			pShowWindow.Call(app.graphNameEdit, SW_SHOW)
+		}
 	}
-	drawText(hdc, "Редактор сценария", titleX, int(body.Top)+14, max(150, int(app.previewRect.Left)-titleX-10), 30, 20, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	drawButton(hdc, app.previewRect, "Проверить", false)
+	drawButton(hdc, app.graphSaveRect, "Сохранить", true)
 	if !detached {
 		drawButton(hdc, app.graphDetachRect, "Открыть отдельно", false)
 	}
@@ -582,6 +595,16 @@ func handleScenarioGraphClick(x, y int32) bool {
 		return true
 	}
 	if pointIn(app.previewRect, x, y) {
+		if currentScenarioGraphSession() != nil {
+			issues := validateScenarioGraph(*g)
+			if len(issues) == 0 {
+				showNotification("PowerPilot", "Схема задачи проверена: ошибок нет.")
+				playUI(successSound)
+			} else {
+				showNotification("PowerPilot", graphValidationText(issues))
+			}
+			return true
+		}
 		app.checkReturnSection = app.section
 		app.section = 12
 		playUI(openSound)
@@ -589,6 +612,12 @@ func handleScenarioGraphClick(x, y int32) bool {
 		updateInputVisibility()
 		focusMainFromScenarioGraph()
 		invalidateScenarioGraphWindows()
+		return true
+	}
+	if currentScenarioGraphSession() != nil && pointIn(app.graphSaveRect, x, y) {
+		if saveScenarioGraphTaskSession(currentScenarioGraphSession()) {
+			playUI(successSound)
+		}
 		return true
 	}
 	for i, r := range app.graphPaletteRects {

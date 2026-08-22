@@ -1025,6 +1025,9 @@ type App struct {
 	graphValidation                        []GraphValidationIssue
 	graphWindow                            uintptr
 	graphDetachRect                        RECT
+	graphSaveRect                          RECT
+	graphNameRect                          RECT
+	graphNameEdit                          uintptr
 	graphTitleBarRect                      RECT
 	graphTitleMinRect                      RECT
 	graphTitleMaxRect                      RECT
@@ -2402,8 +2405,8 @@ func layoutControlsLogical(rc RECT) {
 
 	// Block task flowchart. Saved-task editing uses the same renderer with an isolated draft.
 	if app.section == 7 || app.section == 13 {
-		graphBody := RECT{int32(innerLeft), int32(bodyTop), int32(innerRight), int32(bodyBottom)}
-		layoutScenarioGraphLauncher(graphBody)
+		app.graphDetachRect, app.previewRect, app.graphSaveRect = RECT{}, RECT{}, RECT{}
+		pShowWindow.Call(app.edits[idTaskName], SW_HIDE)
 	}
 	if false && (app.section == 7 || app.section == 13) {
 		app.scenarioBackRect = RECT{}
@@ -3149,6 +3152,19 @@ func updateInputVisibility() {
 	if scenarioGraphDetachedInput && app.graphWindow != 0 && app.graphEditorOpen {
 		pInvalidateRect.Call(app.graphWindow, 0, 0)
 		return
+	}
+	if app.hwnd != 0 && !scenarioGraphDetachedInput && (app.section == 7 || app.section == 13) {
+		if session := scenarioGraphSessionForCurrentTarget(); session != nil {
+			pShowWindow.Call(session.HWND, SW_RESTORE)
+			pSetForegroundWindowGraph.Call(session.HWND)
+		} else {
+			openScenarioGraphWindow()
+		}
+		// The editor is an independent task window. The main window returns to
+		// the task list instead of retaining a redundant launcher page behind it.
+		app.section = 5
+		app.scenarioSavedDraft = false
+		app.editingSavedIdx = -1
 	}
 	if app.hwnd != 0 {
 		layoutControls(app.hwnd)
@@ -4583,7 +4599,6 @@ func scenarioDragOffset(kind, idx int) int32 {
 }
 
 func drawScenarioPage(hdc uintptr, body RECT, w int) {
-	drawScenarioGraphLauncher(hdc, body)
 	if app.confirmDiscardScenario {
 		drawScenarioDiscardConfirm(hdc, body)
 	}

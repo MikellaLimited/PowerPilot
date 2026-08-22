@@ -562,7 +562,10 @@ func handleGraphKeyboard(vk uintptr) bool {
 			persistCurrentScenarioGraph()
 			return true
 		}
-		return false
+		// Native EDIT controls handle their own Ctrl+Z. If the modal editor
+		// itself has focus, swallow the shortcut instead of falling through to
+		// the unrelated main-window undo manager.
+		return keyDown040(0x11) && (vk == 'Z' || vk == 'Y')
 	}
 	if app.graphContextOpen && vk == 0x1B {
 		app.graphContextOpen = false
@@ -577,6 +580,10 @@ func handleGraphKeyboard(vk uintptr) bool {
 		return false
 	}
 	switch vk {
+	case 'Z':
+		return undoCurrentScenarioGraph()
+	case 'Y':
+		return redoCurrentScenarioGraph()
 	case 'A':
 		selectAllGraphNodes()
 	case 'C':

@@ -25,3 +25,25 @@ func TestGraphSessionUICopiesPrivateEditorState(t *testing.T) {
 		t.Fatal("shared main-window state must not be copied into an editor session")
 	}
 }
+
+func TestGraphSessionUndoRedoRestoresGraph(t *testing.T) {
+	graph := graphFromLegacy(TaskState{TaskKind: 1, Mode: 0, DelayMinutes: 5, Action: 4})
+	session := &scenarioGraphSession{
+		Graph:       cloneScenarioGraph(graph),
+		Current:     cloneScenarioGraph(graph),
+		Fingerprint: scenarioGraphFingerprint(graph),
+	}
+	previousSession := activeScenarioGraphSession
+	activeScenarioGraphSession = session
+	defer func() { activeScenarioGraphSession = previousSession }()
+
+	originalX := session.Graph.Nodes[0].X
+	session.Graph.Nodes[0].X += 125
+	session.observeGraphChange()
+	if !undoCurrentScenarioGraph() || session.Graph.Nodes[0].X != originalX {
+		t.Fatalf("undo did not restore node position: got %.0f want %.0f", session.Graph.Nodes[0].X, originalX)
+	}
+	if !redoCurrentScenarioGraph() || session.Graph.Nodes[0].X != originalX+125 {
+		t.Fatalf("redo did not restore changed position: got %.0f want %.0f", session.Graph.Nodes[0].X, originalX+125)
+	}
+}
