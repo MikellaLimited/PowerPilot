@@ -488,11 +488,13 @@ func positionGraphFullEditorInputs() {
 		currentH := int(wr.Bottom - wr.Top)
 		fieldH := currentH
 		fieldY := int(pt.Y) + dy
-		pMoveWindow.Call(h, uintptr(int(pt.X)+dx), uintptr(fieldY), uintptr(wr.Right-wr.Left), uintptr(fieldH), 1)
+		repaint := uintptr(1)
+		if suppressEditVisibilityDuringLayout {
+			repaint = 0
+		}
+		pMoveWindow.Call(h, uintptr(int(pt.X)+dx), uintptr(fieldY), uintptr(wr.Right-wr.Left), uintptr(fieldH), repaint)
 		if visible != 0 {
 			pShowWindow.Call(h, SW_SHOW)
-			pInvalidateRect.Call(h, 0, 1)
-			pUpdateWindow.Call(h)
 		} else {
 			pShowWindow.Call(h, SW_HIDE)
 		}

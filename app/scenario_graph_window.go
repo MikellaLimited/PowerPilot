@@ -391,10 +391,13 @@ func scenarioGraphWindowProcActive(hwnd uintptr, msg uint32, wParam, lParam uint
 		pSetTextColor.Call(wParam, uintptr(theme.text))
 		return scenarioGraphEditBrush()
 	case WM_COMMAND:
-		if app.graphEditorOpen && app.graphEditorSection != 0 {
+		if lParam == app.graphNameEdit || lParam == app.graphEditorText || (app.graphEditorOpen && app.graphEditorSection != 0) {
 			// Detached EDIT controls keep their text locally until Save/close. Native
-			// focus and EN_CHANGE notifications must not touch the main window.
-			pInvalidateRect.Call(hwnd, 0, 0)
+			// focus and EN_CHANGE notifications must not touch the main window. In
+			// particular, do not repaint the entire Direct2D surface for every typed
+			// character: the EDIT already paints its own changed text and a parent
+			// repaint makes the control visibly flash.
+			return 0
 		} else {
 			onCommand(loword(wParam), hiword(wParam), lParam)
 		}
