@@ -445,11 +445,28 @@ func prepareGraphFullEditorLayout(body RECT) (RECT, int) {
 	app.graphEditorRect = RECT{int32(x), int32(y), int32(x + panelW), int32(y + panelH)}
 	app.graphEditorLegacyBody = legacy
 	app.graphEditorDX, app.graphEditorDY = int32(x)-legacy.Left, int32(y)-legacy.Top
+	// A focused native EDIT must never be hidden during a paint/layout pass.
+	// Hiding it, even for one frame, makes Windows remove the real caret and
+	// keyboard focus. Selector changes happen after focus leaves the EDIT, so a
+	// normal visibility rebuild still occurs whenever the form actually changes.
+	focused, _, _ := pGetFocus.Call()
+	focusedEditor := false
+	for _, edit := range graphEditorEdits {
+		if edit != 0 && edit == focused {
+			focusedEditor = true
+			break
+		}
+	}
+	oldSuppress := suppressEditVisibilityDuringLayout
+	if focusedEditor {
+		suppressEditVisibilityDuringLayout = true
+	}
 	oldSection := app.section
 	app.section = app.graphEditorSection
 	layoutControlsLogical(RECT{0, 0, int32(legacyW), int32(legacyH)})
 	app.section = oldSection
 	positionGraphFullEditorInputs()
+	suppressEditVisibilityDuringLayout = oldSuppress
 	return legacy, legacyW
 }
 

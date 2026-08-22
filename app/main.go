@@ -1190,7 +1190,9 @@ func main() {
 	}
 	app.settings.TaskKind = app.currentTaskKind
 	if app.currentTaskKind == 1 {
-		app.currentTaskSection = 7
+		// The detached scenario editor is intentionally not restored on startup.
+		// Open the saved-task list instead of leaving an empty advanced-task page.
+		app.currentTaskSection = 5
 	} else if app.currentTaskSection < 0 || app.currentTaskSection > 2 {
 		app.currentTaskSection = 0
 	}
@@ -1634,13 +1636,12 @@ func createControls(hwnd uintptr) {
 	hName, _, _ := pCreateWindowExW.Call(0, uintptr(unsafe.Pointer(wstr("EDIT"))), uintptr(unsafe.Pointer(wstr(""))), WS_CHILD|WS_TABSTOP|ES_LEFT, 0, 0, 240, 36, hwnd, uintptr(idTaskName), 0, 0)
 	pSendMessageW.Call(hName, WM_SETFONT, app.font, 1)
 	app.edits[idTaskName] = hName
-	// Open the draft the user was actually editing before the previous exit.
-	// Advanced drafts return directly to the block scheme; simple drafts return
-	// to their last Action/When/Additional page.
+	// Restore simple drafts to their last editor page. Advanced drafts use a
+	// detached window, so startup lands on saved tasks instead of a blank host page.
 	if app.currentTaskKind == 1 {
-		app.section = 7
+		app.section = 5
 		app.lastTaskSection = 2
-		app.currentTaskSection = 7
+		app.currentTaskSection = 5
 	} else {
 		sec := app.currentTaskSection
 		if sec < 0 || sec > 2 {
@@ -2795,12 +2796,16 @@ func layoutControlsLogical(rc RECT) {
 			}
 			contentBottom = fieldY + 116
 		} else if app.stepDraft.Type == stepRunCommand || app.stepDraft.Type == stepNotify {
-			app.timeFieldRects[0] = RECT{int32(innerLeft), int32(fieldY + 28), int32(innerRight), int32(fieldY + 72)}
-			move(app.edits[idStepText], innerLeft+9, fieldY+39, innerContentW-18, 24)
+			textRight := innerRight
+			if app.stepDraft.Type == stepRunCommand {
+				textRight = innerRight - 154
+			}
+			app.timeFieldRects[0] = RECT{int32(innerLeft), int32(fieldY + 28), int32(textRight), int32(fieldY + 72)}
+			move(app.edits[idStepText], innerLeft+9, fieldY+39, max(40, textRight-innerLeft-18), 24)
 			pShowWindow.Call(app.edits[idStepText], SW_SHOW)
 			if app.stepDraft.Type == stepRunCommand {
-				app.editorBrowseRect = RECT{int32(innerRight - 118), int32(fieldY + 88), int32(innerRight), int32(fieldY + 124)}
-				contentBottom = fieldY + 124
+				app.editorBrowseRect = RECT{int32(textRight + 10), int32(fieldY + 28), int32(innerRight), int32(fieldY + 72)}
+				contentBottom = fieldY + 72
 			} else {
 				contentBottom = fieldY + 72
 			}

@@ -90,6 +90,13 @@ func utf16Multi(parts ...string) []uint16 {
 	return out
 }
 
+func dialogOwnerWindow() uintptr {
+	if session := currentScenarioGraphSession(); session != nil && session.HWND != 0 {
+		return session.HWND
+	}
+	return app.hwnd
+}
+
 func chooseSaveFile(title, defName, defExt string, filters []string) string {
 	buf := make([]uint16, 4096)
 	copy(buf, utf16.Encode([]rune(defName)))
@@ -97,7 +104,7 @@ func chooseSaveFile(title, defName, defExt string, filters []string) string {
 	t, _ := syscall.UTF16PtrFromString(title)
 	de, _ := syscall.UTF16PtrFromString(defExt)
 	ofn := OPENFILENAME{
-		LStructSize: uint32(unsafe.Sizeof(OPENFILENAME{})), HwndOwner: app.hwnd,
+		LStructSize: uint32(unsafe.Sizeof(OPENFILENAME{})), HwndOwner: dialogOwnerWindow(),
 		LpstrFilter: &filter[0], NFilterIndex: 1, LpstrFile: &buf[0], NMaxFile: uint32(len(buf)),
 		LpstrTitle: t, Flags: ofnExplorer | ofnOverwritePrompt | ofnPathMustExist, LpstrDefExt: de,
 	}
@@ -113,7 +120,7 @@ func chooseOpenFile(title string, filters []string) string {
 	filter := utf16Multi(filters...)
 	t, _ := syscall.UTF16PtrFromString(title)
 	ofn := OPENFILENAME{
-		LStructSize: uint32(unsafe.Sizeof(OPENFILENAME{})), HwndOwner: app.hwnd,
+		LStructSize: uint32(unsafe.Sizeof(OPENFILENAME{})), HwndOwner: dialogOwnerWindow(),
 		LpstrFilter: &filter[0], NFilterIndex: 1, LpstrFile: &buf[0], NMaxFile: uint32(len(buf)),
 		LpstrTitle: t, Flags: ofnExplorer | ofnFileMustExist | ofnPathMustExist,
 	}
@@ -128,7 +135,7 @@ func chooseFolder(title string) string {
 	display := make([]uint16, 260)
 	t, _ := syscall.UTF16PtrFromString(title)
 	bi := BROWSEINFO{
-		HwndOwner: app.hwnd, PszDisplayName: &display[0], LpszTitle: t,
+		HwndOwner: dialogOwnerWindow(), PszDisplayName: &display[0], LpszTitle: t,
 		UlFlags: bifReturnOnlyFSDirs | bifNewDialogStyle,
 	}
 	pidl, _, _ := pSHBrowseForFolderW.Call(uintptr(unsafe.Pointer(&bi)))

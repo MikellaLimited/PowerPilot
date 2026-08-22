@@ -501,6 +501,9 @@ func scenarioGraphWindowProcActive(hwnd uintptr, msg uint32, wParam, lParam uint
 					pShowWindow.Call(edit, SW_HIDE)
 				}
 			}
+			if app.graphEditorText != 0 {
+				pShowWindow.Call(app.graphEditorText, SW_HIDE)
+			}
 			pInvalidateRect.Call(hwnd, 0, 0)
 			return 0
 		}

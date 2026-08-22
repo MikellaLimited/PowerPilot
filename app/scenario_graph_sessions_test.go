@@ -64,3 +64,20 @@ func TestGraphSessionFindsAlreadyOpenSavedTask(t *testing.T) {
 		t.Fatalf("existing editor was not reused: got %#v want %#v", got, want)
 	}
 }
+
+func TestDetachedDialogUsesEditorAsOwner(t *testing.T) {
+	previousSession, previousMain := activeScenarioGraphSession, app.hwnd
+	defer func() {
+		activeScenarioGraphSession, app.hwnd = previousSession, previousMain
+	}()
+
+	app.hwnd = 10
+	activeScenarioGraphSession = &scenarioGraphSession{HWND: 42}
+	if got := dialogOwnerWindow(); got != 42 {
+		t.Fatalf("detached dialog owner = %d, want editor window 42", got)
+	}
+	activeScenarioGraphSession = nil
+	if got := dialogOwnerWindow(); got != 10 {
+		t.Fatalf("main dialog owner = %d, want main window 10", got)
+	}
+}
