@@ -375,6 +375,82 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	}
 	drawGraphContextMenu(hdc)
 	drawGraphCompactEditor(hdc, body)
+	drawScenarioGraphCloseConfirm(hdc, body)
+}
+
+func drawScenarioGraphCloseConfirm(hdc uintptr, body RECT) {
+	if !app.graphCloseConfirm {
+		return
+	}
+	fill(hdc, body, blendColor(theme.bg, rgb(0, 0, 0), .48))
+	w := minInt(510, int(body.Right-body.Left)-48)
+	h := 210
+	x := int(body.Left+body.Right)/2 - w/2
+	y := int(body.Top+body.Bottom)/2 - h/2
+	app.graphCloseConfirmRect = RECT{int32(x), int32(y), int32(x + w), int32(y + h)}
+	roundFill(hdc, app.graphCloseConfirmRect, surfacePanelColor(), 16)
+	if ui2d.active {
+		d2dDrawRoundedOutline(app.graphCloseConfirmRect, 16, 1.2, blendColor(theme.border, theme.accent2, .46))
+	}
+	app.graphCloseCancelRect = RECT{int32(x + w - 44), int32(y + 10), int32(x + w - 10), int32(y + 44)}
+	drawSmallGlyphButton(hdc, app.graphCloseCancelRect, "×", theme.muted)
+	drawText(hdc, "Закрыть редактор?", x+24, y+22, w-76, 28, 19, 700, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Сохрани изменения задачи или закрой окно без сохранения.", x+24, y+62, w-48, 48, 11, 450, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
+	buttonY := y + 142
+	gap := 12
+	bw := (w - 48 - gap) / 2
+	app.graphCloseSaveRect = RECT{int32(x + 24), int32(buttonY), int32(x + 24 + bw), int32(buttonY + 44)}
+	app.graphCloseDiscardRect = RECT{int32(x + 24 + bw + gap), int32(buttonY), int32(x + w - 24), int32(buttonY + 44)}
+	drawButton(hdc, app.graphCloseSaveRect, "Сохранить", true)
+	drawOutlinedButton(hdc, app.graphCloseDiscardRect, "Не сохранять", theme.danger)
+}
+
+func commitOpenGraphEditorBeforeClose() {
+	if !app.graphEditorOpen {
+		return
+	}
+	if app.graphEditorSection != 0 {
+		commitGraphFullEditorDraft()
+		closeGraphFullEditor()
+		return
+	}
+	syncGraphCompactText()
+	app.graphEditorOpen = false
+	if app.graphEditorText != 0 {
+		pShowWindow.Call(app.graphEditorText, SW_HIDE)
+	}
+	persistCurrentScenarioGraph()
+}
+
+func handleScenarioGraphCloseConfirm(x, y int32) bool {
+	if !app.graphCloseConfirm {
+		return false
+	}
+	if pointIn(app.graphCloseCancelRect, x, y) {
+		app.graphCloseConfirm = false
+		invalidateScenarioGraphWindows()
+		return true
+	}
+	session := currentScenarioGraphSession()
+	if session == nil {
+		return true
+	}
+	if pointIn(app.graphCloseSaveRect, x, y) {
+		commitOpenGraphEditorBeforeClose()
+		if !saveScenarioGraphTaskSession(session) {
+			return true
+		}
+		session.CloseApproved = true
+		pSendMessageW.Call(session.HWND, WM_CLOSE, 0, 0)
+		return true
+	}
+	if pointIn(app.graphCloseDiscardRect, x, y) {
+		session.Discard = true
+		session.CloseApproved = true
+		pSendMessageW.Call(session.HWND, WM_CLOSE, 0, 0)
+		return true
+	}
+	return true
 }
 
 func drawScenarioGraphNode(hdc uintptr, g *ScenarioGraph, n ScenarioGraphNode) {
@@ -585,6 +661,9 @@ func handleScenarioGraphClick(x, y int32) bool {
 		return false
 	}
 	g := ensureCurrentScenarioGraph()
+	if handleScenarioGraphCloseConfirm(x, y) {
+		return true
+	}
 	if !scenarioGraphDetachedInput && pointIn(app.graphDetachRect, x, y) {
 		if !closeScenarioGraphSessionsForCurrentTarget() {
 			openScenarioGraphWindow()

@@ -60,6 +60,11 @@ func advanceDetachedEditorScroll() bool {
 }
 
 func openScenarioGraphWindow() {
+	if session := scenarioGraphSessionForCurrentTarget(); session != nil {
+		pShowWindow.Call(session.HWND, SW_RESTORE)
+		pSetForegroundWindowGraph.Call(session.HWND)
+		return
+	}
 	hinst, _, _ := pGetModuleHandleW.Call(0)
 	className := wstr("PowerPilotScenarioGraphWindow")
 	if !graphWindowClassRegistered {
@@ -328,7 +333,9 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 		return scenarioGraphWindowProcActive(hwnd, msg, wParam, lParam)
 	})
 	if session.Closed {
-		saveScenarioGraphSession(session)
+		if !session.Discard {
+			saveScenarioGraphSession(session)
+		}
 		delete(scenarioGraphSessions, hwnd)
 		app.graphWindow = 0
 		for other := range scenarioGraphSessions {
@@ -484,7 +491,20 @@ func scenarioGraphWindowProcActive(hwnd uintptr, msg uint32, wParam, lParam uint
 			return 0
 		}
 	case WM_CLOSE:
-		if session := currentScenarioGraphSession(); session != nil {
+		if session := currentScenarioGraphSession(); session != nil && !app.exiting && !session.CloseApproved {
+			app.graphCloseConfirm = true
+			if app.graphNameEdit != 0 {
+				pShowWindow.Call(app.graphNameEdit, SW_HIDE)
+			}
+			for _, edit := range graphEditorEdits {
+				if edit != 0 {
+					pShowWindow.Call(edit, SW_HIDE)
+				}
+			}
+			pInvalidateRect.Call(hwnd, 0, 0)
+			return 0
+		}
+		if session := currentScenarioGraphSession(); session != nil && !session.Discard {
 			syncScenarioGraphSessionName(session)
 		}
 		if app.graphEditorOpen {

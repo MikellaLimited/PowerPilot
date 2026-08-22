@@ -1028,6 +1028,11 @@ type App struct {
 	graphSaveRect                          RECT
 	graphNameRect                          RECT
 	graphNameEdit                          uintptr
+	graphCloseConfirm                      bool
+	graphCloseConfirmRect                  RECT
+	graphCloseSaveRect                     RECT
+	graphCloseDiscardRect                  RECT
+	graphCloseCancelRect                   RECT
 	graphTitleBarRect                      RECT
 	graphTitleMinRect                      RECT
 	graphTitleMaxRect                      RECT
@@ -2800,19 +2805,22 @@ func layoutControlsLogical(rc RECT) {
 				contentBottom = fieldY + 72
 			}
 		}
-		errorY := max(fieldY+118, contentBottom+16)
+		// Reserve a complete label row between the dynamic action controls and
+		// the error-policy buttons. The previous 16 px gap made the label overlap
+		// the volume field on one side and the buttons on the other.
+		errorY := max(fieldY+118, contentBottom+30)
 		errGap := 8
 		errW := (innerContentW - errGap*2) / 3
 		for i := 0; i < 3; i++ {
 			x := innerLeft + i*(errW+errGap)
 			app.stepErrorRects[i] = RECT{int32(x), int32(errorY), int32(x + errW), int32(errorY + 32)}
 		}
-		app.stepRetryFieldRect = RECT{int32(innerLeft), int32(errorY + 46), int32(innerLeft + 92), int32(errorY + 76)}
+		app.stepRetryFieldRect = RECT{int32(innerLeft), int32(errorY + 68), int32(innerLeft + 92), int32(errorY + 98)}
 		delayX := innerLeft
 		if app.stepDraft.OnError == 2 {
 			delayX = innerLeft + 112
 		}
-		app.stepDelayFieldRect = RECT{int32(delayX), int32(errorY + 46), int32(delayX + 92), int32(errorY + 76)}
+		app.stepDelayFieldRect = RECT{int32(delayX), int32(errorY + 68), int32(delayX + 92), int32(errorY + 98)}
 		if app.stepDraft.OnError == 2 {
 			move(app.edits[idStepRetries], int(app.stepRetryFieldRect.Left)+6, int(app.stepRetryFieldRect.Top)+7, int(app.stepRetryFieldRect.Right-app.stepRetryFieldRect.Left)-12, 18)
 			pShowWindow.Call(app.edits[idStepRetries], SW_SHOW)

@@ -47,3 +47,20 @@ func TestGraphSessionUndoRedoRestoresGraph(t *testing.T) {
 		t.Fatalf("redo did not restore changed position: got %.0f want %.0f", session.Graph.Nodes[0].X, originalX+125)
 	}
 }
+
+func TestGraphSessionFindsAlreadyOpenSavedTask(t *testing.T) {
+	previousSessions := scenarioGraphSessions
+	previousSavedDraft, previousDraft := app.scenarioSavedDraft, app.savedEditDraft
+	defer func() {
+		scenarioGraphSessions = previousSessions
+		app.scenarioSavedDraft, app.savedEditDraft = previousSavedDraft, previousDraft
+	}()
+
+	app.scenarioSavedDraft = true
+	app.savedEditDraft.ID = "task-42"
+	want := &scenarioGraphSession{HWND: 42, TargetID: "task-42", SavedTask: true}
+	scenarioGraphSessions = map[uintptr]*scenarioGraphSession{want.HWND: want}
+	if got := scenarioGraphSessionForCurrentTarget(); got != want {
+		t.Fatalf("existing editor was not reused: got %#v want %#v", got, want)
+	}
+}

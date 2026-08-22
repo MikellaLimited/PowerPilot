@@ -12,19 +12,21 @@ import (
 )
 
 type scenarioGraphSession struct {
-	HWND        uintptr
-	Graph       ScenarioGraph
-	TargetID    string
-	SavedTask   bool
-	TaskName    string
-	Undo        []ScenarioGraph
-	Redo        []ScenarioGraph
-	Current     ScenarioGraph
-	Fingerprint string
-	Applying    bool
-	UI          App
-	EditorEdits map[int]uintptr
-	Closed      bool
+	HWND          uintptr
+	Graph         ScenarioGraph
+	TargetID      string
+	SavedTask     bool
+	TaskName      string
+	Undo          []ScenarioGraph
+	Redo          []ScenarioGraph
+	Current       ScenarioGraph
+	Fingerprint   string
+	Applying      bool
+	CloseApproved bool
+	Discard       bool
+	UI            App
+	EditorEdits   map[int]uintptr
+	Closed        bool
 }
 
 var scenarioGraphSessions = map[uintptr]*scenarioGraphSession{}
@@ -205,6 +207,13 @@ func saveScenarioGraphSession(session *scenarioGraphSession) {
 	}
 	saveSettings()
 	saveDraftAutosave()
+	rebuildSavedFilter()
+	if app.hwnd != 0 {
+		if currentScenarioGraphSession() == nil {
+			layoutControls(app.hwnd)
+		}
+		invalidate(app.hwnd)
+	}
 }
 
 func saveScenarioGraphTaskSession(session *scenarioGraphSession) bool {
@@ -234,6 +243,14 @@ func saveScenarioGraphTaskSession(session *scenarioGraphSession) bool {
 	saveSettings()
 	maintainWakeTimer(time.Now())
 	appendHistory("SAVE", task.Name)
+	rebuildSavedFilter()
+	app.savedScroll, app.savedScrollPx, app.savedScrollTarget = 0, 0, 0
+	if app.hwnd != 0 {
+		if currentScenarioGraphSession() == nil {
+			layoutControls(app.hwnd)
+		}
+		invalidate(app.hwnd)
+	}
 	showNotification("PowerPilot", "Задача сохранена: "+task.Name)
 	return true
 }
