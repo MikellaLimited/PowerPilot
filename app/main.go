@@ -8907,7 +8907,14 @@ func onClick(x, y int32) {
 				app.conditionCatalogTarget = 0
 			}
 			playUI(clickSound)
-			if app.settings.AnimationMode == 2 {
+			if scenarioGraphDetachedInput {
+				// The detached editor owns a separate paint/layout cycle. Commit the final
+				// catalogue geometry immediately instead of relying on the hidden main
+				// window to advance or finish this local transition.
+				app.conditionCatalogAnim = app.conditionCatalogTarget
+				app.conditionCatalogFrom = app.conditionCatalogTarget
+				app.conditionCatalogAnimating = false
+			} else if app.settings.AnimationMode == 2 {
 				app.conditionCatalogAnim = app.conditionCatalogTarget
 				app.conditionCatalogAnimating = false
 				layoutControls(app.hwnd)
