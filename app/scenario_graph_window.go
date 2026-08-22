@@ -59,11 +59,6 @@ func advanceDetachedEditorScroll() bool {
 }
 
 func openScenarioGraphWindow() {
-	if app.graphWindow != 0 {
-		pShowWindow.Call(app.graphWindow, SW_RESTORE)
-		pSetForegroundWindowGraph.Call(app.graphWindow)
-		return
-	}
 	hinst, _, _ := pGetModuleHandleW.Call(0)
 	className := wstr("PowerPilotScenarioGraphWindow")
 	if !graphWindowClassRegistered {
@@ -96,6 +91,14 @@ func openScenarioGraphWindow() {
 		message("PowerPilot", "Не удалось открыть отдельное окно редактора.", MB_OK|MB_ICONERROR)
 		return
 	}
+	targetID, saved := scenarioGraphTargetID()
+	session := &scenarioGraphSession{HWND: hwnd, Graph: cloneScenarioGraph(*ensureCurrentScenarioGraph()), TargetID: targetID, SavedTask: saved}
+	copyGraphSessionUI(&session.UI, &app)
+	session.UI.graphWindow = hwnd
+	session.UI.graphSelectedNodes = map[string]bool{}
+	session.UI.graphSelectedNodeID, session.UI.graphSelectedEdgeID = "", ""
+	session.UI.graphEditorOpen, session.UI.graphContextOpen = false, false
+	scenarioGraphSessions[hwnd] = session
 	app.graphWindow = hwnd
 	pSetTimer.Call(hwnd, scenarioGraphAnimationTimerID, 10, 0)
 	app.graphTitleHover = -1
@@ -130,17 +133,19 @@ func layoutScenarioGraphLauncher(body RECT) {
 		app.graphPaletteRects[i] = RECT{}
 	}
 	app.graphCanvasRect = RECT{}
-	cardW := minInt(650, int(body.Right-body.Left)-40)
+	cardW := minInt(650, int(body.Right-body.Left)-24)
 	x := int(body.Left+body.Right)/2 - cardW/2
-	y := int(body.Top) + 72
-	app.graphDetachRect = RECT{int32(x + 28), int32(y + 150), int32(x + cardW - 28), int32(y + 196)}
-	app.previewRect = RECT{int32(x + 28), int32(y + 210), int32(x + cardW - 28), int32(y + 250)}
+	y := int(body.Top) + 24
+	cardH := minInt(320, max(250, int(body.Bottom-body.Top)-110))
+	buttonY := y + cardH - 116
+	app.graphDetachRect = RECT{int32(x + 28), int32(buttonY), int32(x + cardW - 28), int32(buttonY + 42)}
+	app.previewRect = RECT{int32(x + 28), int32(buttonY + 52), int32(x + cardW - 28), int32(buttonY + 90)}
 	if app.scenarioSavedDraft && app.section == 13 {
-		app.savedScenarioNameRect = RECT{int32(x + 28), int32(y + 82), int32(x + cardW - 28), int32(y + 124)}
-		move(app.edits[idTaskName], x+40, y+92, cardW-80, 22)
+		app.savedScenarioNameRect = RECT{int32(x + 28), int32(y + 84), int32(x + cardW - 28), int32(y + 124)}
+		move(app.edits[idTaskName], x+40, y+93, cardW-80, 22)
 		pShowWindow.Call(app.edits[idTaskName], SW_SHOW)
-		app.savedScenarioSaveRect = RECT{int32(x + 28), int32(y + 300), int32(x + cardW/2 - 6), int32(y + 342)}
-		app.savedScenarioCancelRect = RECT{int32(x + cardW/2 + 6), int32(y + 300), int32(x + cardW - 28), int32(y + 342)}
+		app.savedScenarioSaveRect = RECT{int32(x + 28), int32(y + cardH + 10), int32(x + cardW/2 - 6), int32(y + cardH + 48)}
+		app.savedScenarioCancelRect = RECT{int32(x + cardW/2 + 6), int32(y + cardH + 10), int32(x + cardW - 28), int32(y + cardH + 48)}
 		app.savedScenarioCheckRect = RECT{}
 	} else {
 		app.savedScenarioNameRect = RECT{}
@@ -150,10 +155,10 @@ func layoutScenarioGraphLauncher(body RECT) {
 
 func drawScenarioGraphLauncher(hdc uintptr, body RECT) {
 	g := ensureCurrentScenarioGraph()
-	cardW := minInt(650, int(body.Right-body.Left)-40)
-	cardH := 370
+	cardW := minInt(650, int(body.Right-body.Left)-24)
+	cardH := minInt(320, max(250, int(body.Bottom-body.Top)-110))
 	x := int(body.Left+body.Right)/2 - cardW/2
-	y := int(body.Top) + 72
+	y := int(body.Top) + 24
 	card := RECT{int32(x), int32(y), int32(x + cardW), int32(y + cardH)}
 	roundFill(hdc, card, surfacePanelColor(), 18)
 	if ui2d.active {
@@ -172,9 +177,13 @@ func drawScenarioGraphLauncher(hdc uintptr, body RECT) {
 	} else {
 		drawText(hdc, "Название можно задать при сохранении задачи", x+28, y+87, cardW-56, 24, 11, 500, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
-	drawButton(hdc, app.graphDetachRect, "Открыть редактор сценария", true)
+	openLabel := "Открыть редактор сценария"
+	if scenarioGraphSessionForCurrentTarget() != nil {
+		openLabel = "Закрыть и сохранить"
+	}
+	drawButton(hdc, app.graphDetachRect, openLabel, true)
 	drawButton(hdc, app.previewRect, "Просмотр и проверка", false)
-	drawText(hdc, summary, x+28, y+258, cardW-56, 24, 10, 500, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	drawText(hdc, summary, x+28, int(app.previewRect.Bottom)+4, cardW-56, 22, 10, 500, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	if app.scenarioSavedDraft && app.section == 13 {
 		drawButton(hdc, app.savedScenarioSaveRect, "Сохранить изменения", true)
 		drawButton(hdc, app.savedScenarioCancelRect, "Отмена", false)
@@ -243,8 +252,8 @@ func invalidateScenarioGraphWindows() {
 	if app.hwnd != 0 {
 		pInvalidateRect.Call(app.hwnd, 0, 0)
 	}
-	if app.graphWindow != 0 {
-		pInvalidateRect.Call(app.graphWindow, 0, 0)
+	for hwnd := range scenarioGraphSessions {
+		pInvalidateRect.Call(hwnd, 0, 0)
 	}
 }
 
@@ -286,6 +295,30 @@ func drawScenarioGraphMainPlaceholder(hdc uintptr, body RECT) {
 }
 
 func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
+	session := scenarioGraphSessions[hwnd]
+	if session == nil || activeScenarioGraphSession == session {
+		return scenarioGraphWindowProcActive(hwnd, msg, wParam, lParam)
+	}
+	result := withScenarioGraphSession(hwnd, func() uintptr {
+		return scenarioGraphWindowProcActive(hwnd, msg, wParam, lParam)
+	})
+	if session.Closed {
+		saveScenarioGraphSession(session)
+		delete(scenarioGraphSessions, hwnd)
+		app.graphWindow = 0
+		for other := range scenarioGraphSessions {
+			app.graphWindow = other
+			break
+		}
+		if app.hwnd != 0 {
+			layoutControls(app.hwnd)
+			invalidate(app.hwnd)
+		}
+	}
+	return result
+}
+
+func scenarioGraphWindowProcActive(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case WM_GETMINMAXINFO:
 		mmi := (*MINMAXINFO)(unsafe.Pointer(lParam))
@@ -438,22 +471,22 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 		pDestroyWindow.Call(hwnd)
 		return 0
 	case WM_DESTROY:
-		if app.graphWindow == hwnd {
-			pKillTimer.Call(hwnd, scenarioGraphAnimationTimerID)
-			if graphEditBrush != 0 {
-				pDeleteObject.Call(graphEditBrush)
-				graphEditBrush, graphEditBrushColor = 0, 0
+		pKillTimer.Call(hwnd, scenarioGraphAnimationTimerID)
+		if app.graphEditorText != 0 {
+			pDestroyWindow.Call(app.graphEditorText)
+		}
+		for _, edit := range graphEditorEdits {
+			if edit != 0 {
+				pDestroyWindow.Call(edit)
 			}
-			app.graphEditorText = 0
-			graphEditorEdits = nil
-			app.graphEditorOpen = false
-			app.graphWindow = 0
-			app.graphDragging = false
-			pReleaseCapture.Call()
-			if app.hwnd != 0 {
-				layoutControls(app.hwnd)
-				invalidate(app.hwnd)
-			}
+		}
+		app.graphEditorText = 0
+		graphEditorEdits = nil
+		app.graphEditorOpen = false
+		app.graphDragging = false
+		pReleaseCapture.Call()
+		if session := currentScenarioGraphSession(); session != nil {
+			session.Closed = true
 		}
 		return 0
 	}

@@ -23,6 +23,46 @@ func TestScenarioGraphMigratesLegacyTask(t *testing.T) {
 	}
 }
 
+func TestScenarioGraphUsesOneFunctionPerBlock(t *testing.T) {
+	legacy := TaskState{
+		TaskKind: 1, Mode: 0, DelayMinutes: 5, Action: 4, TriggerLogic: logicAND,
+		Conditions: []AutomationCondition{
+			{ID: "cpu", Type: condCPU, Enabled: true},
+			{ID: "gpu", Type: condGPU, Enabled: true},
+			{ID: "disk", Type: condDisk, Enabled: true},
+		},
+		Steps: []ActionStep{
+			{ID: "notify", Type: stepNotify, Text: "ready"},
+			{ID: "wait", Type: stepWait, Value: 10},
+		},
+	}
+	g := graphFromLegacy(legacy)
+	triggers, actions, logicNodes := 0, 0, 0
+	for _, node := range g.Nodes {
+		switch node.Kind {
+		case graphNodeTrigger:
+			triggers++
+			if len(node.Conditions) > 1 {
+				t.Fatalf("conditions node contains %d functions", len(node.Conditions))
+			}
+		case graphNodeAction:
+			actions++
+			if len(node.Steps) != 1 {
+				t.Fatalf("action node contains %d functions", len(node.Steps))
+			}
+		case graphNodeLogic:
+			logicNodes++
+		}
+	}
+	if triggers != 3 || actions != 2 || logicNodes != 1 {
+		t.Fatalf("unexpected graph shape: conditions=%d actions=%d logic=%d", triggers, actions, logicNodes)
+	}
+	state := graphLegacyState(g, TaskState{})
+	if len(state.Conditions) != 3 || len(state.Steps) != 2 {
+		t.Fatalf("legacy projection lost separate functions: %#v", state)
+	}
+}
+
 func TestScenarioGraphV2MergesOldTriggerAndCondition(t *testing.T) {
 	trigger := newScenarioGraphNode(graphNodeTrigger, 0, 0)
 	trigger.Conditions = nil

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const scenarioGraphVersion = 2
+const scenarioGraphVersion = 3
 
 const (
 	graphNodeTrigger = iota
@@ -95,7 +95,7 @@ func cloneScenarioGraph(src ScenarioGraph) ScenarioGraph {
 func graphNodeKindName(kind int) string {
 	switch kind {
 	case graphNodeTrigger:
-		return "Триггер и условия"
+		return "Условия"
 	case graphNodeCondition:
 		return "Условия"
 	case graphNodeAction:
@@ -139,7 +139,7 @@ func newScenarioGraphNode(kind int, x, y float64) ScenarioGraphNode {
 	switch kind {
 	case graphNodeTrigger:
 		n.Mode, n.DelayMins = 0, 30
-		n.Conditions = []AutomationCondition{}
+		n.Conditions = []AutomationCondition{{ID: newAutomationID("cond"), Type: condCPU, Logic: logicAND, Compare: -1, Threshold: 10, HoldSeconds: 30, Enabled: true}}
 	case graphNodeCondition:
 		n.Conditions = []AutomationCondition{{ID: newAutomationID("cond"), Type: condCPU, Logic: logicAND, Compare: -1, Threshold: 10, HoldSeconds: 30, Enabled: true}}
 	case graphNodeAction:
@@ -155,25 +155,44 @@ func newScenarioGraphNode(kind int, x, y float64) ScenarioGraphNode {
 }
 
 func graphFromLegacy(t TaskState) ScenarioGraph {
-	trigger := newScenarioGraphNode(graphNodeTrigger, 60, 160)
-	trigger.Mode = t.Mode
-	trigger.DelayHours, trigger.DelayMins, trigger.DelaySecs = t.DelayHours, t.DelayMinutes, t.DelaySeconds
-	trigger.Exact, trigger.IdleSecs, trigger.Process, trigger.Recurrence = t.Exact, t.IdleMinutes, t.WatchProcess, t.Recurrence
-	trigger.Conditions = append([]AutomationCondition(nil), t.Conditions...)
-	trigger.Logic = t.TriggerLogic
 	finish := newScenarioGraphNode(graphNodeFinish, 800, 160)
 	finish.Action = t.Action
-	g := ScenarioGraph{Version: scenarioGraphVersion, Zoom: 1, Nodes: []ScenarioGraphNode{trigger}}
-	previous := trigger.ID
-	if len(t.Steps) > 0 {
-		action := newScenarioGraphNode(graphNodeAction, 390, 120)
-		action.Steps = cloneActionSteps(t.Steps)
+	g := ScenarioGraph{Version: scenarioGraphVersion, Zoom: 1}
+	conditionCount := max(1, len(t.Conditions))
+	triggerIDs := make([]string, 0, conditionCount)
+	for i := 0; i < conditionCount; i++ {
+		trigger := newScenarioGraphNode(graphNodeTrigger, 60, 80+float64(i)*130)
+		trigger.Mode = t.Mode
+		trigger.DelayHours, trigger.DelayMins, trigger.DelaySecs = t.DelayHours, t.DelayMinutes, t.DelaySeconds
+		trigger.Exact, trigger.IdleSecs, trigger.Process, trigger.Recurrence = t.Exact, t.IdleMinutes, t.WatchProcess, t.Recurrence
+		trigger.Conditions = nil
+		if i < len(t.Conditions) {
+			trigger.Conditions = []AutomationCondition{t.Conditions[i]}
+		}
+		g.Nodes = append(g.Nodes, trigger)
+		triggerIDs = append(triggerIDs, trigger.ID)
+	}
+	previous := triggerIDs[0]
+	if len(triggerIDs) > 1 {
+		logic := newScenarioGraphNode(graphNodeLogic, 330, 160)
+		if t.TriggerLogic == logicOR {
+			logic.LogicOp = graphLogicOR
+		}
+		g.Nodes = append(g.Nodes, logic)
+		for _, id := range triggerIDs {
+			g.connect(id, graphPortNext, logic.ID)
+		}
+		previous = logic.ID
+	}
+	for i, step := range t.Steps {
+		action := newScenarioGraphNode(graphNodeAction, 440+float64(i)*250, 120)
+		action.Steps = []ActionStep{step}
 		g.Nodes = append(g.Nodes, action)
-		g.Edges = append(g.Edges, ScenarioGraphEdge{ID: newAutomationID("edge"), From: previous, FromPort: graphPortNext, To: action.ID})
+		g.connect(previous, graphPortNext, action.ID)
 		previous = action.ID
 	}
 	g.Nodes = append(g.Nodes, finish)
-	g.Edges = append(g.Edges, ScenarioGraphEdge{ID: newAutomationID("edge"), From: previous, FromPort: graphPortNext, To: finish.ID})
+	g.connect(previous, graphPortNext, finish.ID)
 	return g
 }
 
@@ -192,6 +211,9 @@ func ensureScenarioGraph(g ScenarioGraph, legacy TaskState) ScenarioGraph {
 	if g.Version < 2 {
 		g = migrateScenarioGraphV2(g)
 	}
+	if g.Version < 3 {
+		g = migrateScenarioGraphV3(g)
+	}
 	g.Version = scenarioGraphVersion
 	if g.Zoom < .45 || g.Zoom > 2.2 {
 		g.Zoom = 1
@@ -204,6 +226,72 @@ func ensureScenarioGraph(g ScenarioGraph, legacy TaskState) ScenarioGraph {
 			g.Nodes[i].WaitSecs = 30
 		}
 	}
+	return g
+}
+
+func migrateScenarioGraphV3(g ScenarioGraph) ScenarioGraph {
+	original := append([]ScenarioGraphNode(nil), g.Nodes...)
+	for _, snapshot := range original {
+		node := g.node(snapshot.ID)
+		if node == nil {
+			continue
+		}
+		if node.Kind == graphNodeTrigger && len(node.Conditions) > 1 {
+			base := *node
+			conditions := append([]AutomationCondition(nil), node.Conditions...)
+			node.Conditions = []AutomationCondition{conditions[0]}
+			outgoing := g.outgoingAll(node.ID, graphPortNext)
+			kept := g.Edges[:0]
+			for _, edge := range g.Edges {
+				if edge.From != node.ID || edge.FromPort != graphPortNext {
+					kept = append(kept, edge)
+				}
+			}
+			g.Edges = kept
+			logic := newScenarioGraphNode(graphNodeLogic, base.X+260, base.Y)
+			if base.Logic == logicOR {
+				logic.LogicOp = graphLogicOR
+			}
+			g.Nodes = append(g.Nodes, logic)
+			g.connect(node.ID, graphPortNext, logic.ID)
+			for i := 1; i < len(conditions); i++ {
+				branch := base
+				branch.ID = newAutomationID("node")
+				branch.Y += float64(i) * 130
+				branch.Conditions = []AutomationCondition{conditions[i]}
+				g.Nodes = append(g.Nodes, branch)
+				g.connect(branch.ID, graphPortNext, logic.ID)
+			}
+			for _, edge := range outgoing {
+				g.connect(logic.ID, graphPortNext, edge.To)
+			}
+		}
+		if node = g.node(snapshot.ID); node != nil && node.Kind == graphNodeAction && len(node.Steps) > 1 {
+			base := *node
+			steps := cloneActionSteps(node.Steps)
+			node.Steps = []ActionStep{steps[0]}
+			outgoing := g.outgoingAll(node.ID, graphPortNext)
+			kept := g.Edges[:0]
+			for _, edge := range g.Edges {
+				if edge.From != node.ID || edge.FromPort != graphPortNext {
+					kept = append(kept, edge)
+				}
+			}
+			g.Edges = kept
+			previous := node.ID
+			for i := 1; i < len(steps); i++ {
+				next := newScenarioGraphNode(graphNodeAction, base.X+float64(i)*250, base.Y)
+				next.Steps = []ActionStep{steps[i]}
+				g.Nodes = append(g.Nodes, next)
+				g.connect(previous, graphPortNext, next.ID)
+				previous = next.ID
+			}
+			for _, edge := range outgoing {
+				g.connect(previous, graphPortNext, edge.To)
+			}
+		}
+	}
+	g.Version = scenarioGraphVersion
 	return g
 }
 
@@ -372,7 +460,7 @@ func validateScenarioGraph(g ScenarioGraph) []GraphValidationIssue {
 		}
 	}
 	if triggers == 0 {
-		issues = append(issues, GraphValidationIssue{2, "", "Добавьте хотя бы один блок «Триггер и условия»"})
+		issues = append(issues, GraphValidationIssue{2, "", "Добавьте хотя бы один блок «Условия»"})
 	}
 	if finishes == 0 {
 		issues = append(issues, GraphValidationIssue{2, "", "Добавьте хотя бы один блок завершения"})

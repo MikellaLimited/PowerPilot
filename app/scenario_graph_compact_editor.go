@@ -137,7 +137,10 @@ func withGraphEditorEdits(fn func()) {
 
 func loadGraphTriggerIntoLegacyEditor(node *ScenarioGraphNode) {
 	app.selectedMode = node.Mode
-	if app.scenarioSavedDraft {
+	if currentScenarioGraphSession() != nil {
+		// A detached window keeps its values in the graph node until that
+		// particular window is closed and saved.
+	} else if app.scenarioSavedDraft {
 		t := &app.savedEditDraft
 		t.Mode, t.DelayHours, t.DelayMinutes, t.DelaySeconds = node.Mode, node.DelayHours, node.DelayMins, node.DelaySecs
 		t.Exact, t.IdleMinutes, t.WatchProcess, t.Recurrence = node.Exact, node.IdleSecs, node.Process, node.Recurrence
@@ -153,6 +156,23 @@ func loadGraphTriggerIntoLegacyEditor(node *ScenarioGraphNode) {
 	pSetWindowTextW.Call(app.edits[idIdleMinutes], uintptr(unsafe.Pointer(wstr(strconv.Itoa(max(node.IdleSecs, 1))))))
 	pSetWindowTextW.Call(app.edits[idWatchProcess], uintptr(unsafe.Pointer(wstr(node.Process))))
 	pSetWindowTextW.Call(app.edits[idScheduleTime], uintptr(unsafe.Pointer(wstr(node.Recurrence.TimeHHMM))))
+}
+
+func syncSelectedGraphTriggerFromFields() {
+	node := selectedGraphNode()
+	if node == nil || node.Kind != graphNodeTrigger {
+		return
+	}
+	node.Mode = app.selectedMode
+	node.DelayHours = parseInt(getText(app.edits[idDelayHours]), node.DelayHours)
+	node.DelayMins = parseInt(getText(app.edits[idDelayMinutes]), node.DelayMins)
+	node.DelaySecs = parseInt(getText(app.edits[idDelaySeconds]), node.DelaySecs)
+	node.Exact = exactFromFields()
+	node.IdleSecs = parseInt(getText(app.edits[idIdleMinutes]), max(node.IdleSecs, 1))
+	node.Process = strings.TrimSpace(getText(app.edits[idWatchProcess]))
+	if value := strings.TrimSpace(getText(app.edits[idScheduleTime])); value != "" {
+		node.Recurrence.TimeHHMM = value
+	}
 }
 
 func ensureGraphCompactTextControl() {
@@ -273,6 +293,9 @@ func drawGraphCompactEditor(hdc uintptr, body RECT) {
 	}
 	w := minInt(560, int(body.Right-body.Left)-52)
 	h := 430
+	if node.Kind == graphNodeJunction || node.Kind == graphNodeLogic {
+		h = 310
+	}
 	x := int(body.Left+body.Right)/2 - w/2
 	y := int(body.Top+body.Bottom)/2 - h/2
 	app.graphEditorRect = RECT{int32(x), int32(y), int32(x + w), int32(y + h)}
@@ -320,6 +343,17 @@ func drawGraphCompactEditor(hdc uintptr, body RECT) {
 		drawText(hdc, fmt.Sprintf("Ожидание: %d секунд", node.WaitSecs), contentX, contentY, contentW, 32, 15, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 		drawButton(hdc, app.graphEditorActionRects[0], "− 10 секунд", false)
 		drawButton(hdc, app.graphEditorActionRects[1], "+ 10 секунд", false)
+	case graphNodeJunction, graphNodeLogic:
+		names := []string{"Соединение", "И", "ИЛИ", "НЕ", "XOR", "НЕ-И", "НЕ-ИЛИ"}
+		gap := 8
+		bw := (contentW - gap*2) / 3
+		for i, name := range names {
+			row, col := i/3, i%3
+			r := RECT{int32(contentX + col*(bw+gap)), int32(contentY + row*42), int32(contentX + col*(bw+gap) + bw), int32(contentY + row*42 + 34)}
+			app.graphEditorActionRects[i] = r
+			active := (i == 0 && node.Kind == graphNodeJunction) || (i > 0 && node.Kind == graphNodeLogic && node.LogicOp == i-1)
+			drawSelectableButton(hdc, r, name, active)
+		}
 	case graphNodeCondition, graphNodeAction:
 		count := len(node.Conditions)
 		if node.Kind == graphNodeAction {
@@ -338,7 +372,7 @@ func drawGraphCompactEditor(hdc uintptr, body RECT) {
 		}
 		drawText(hdc, fmt.Sprintf("Функция %d из %d", minInt(app.graphEditorItem+1, count), count), contentX, contentY, contentW, 22, 11, 600, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 		drawText(hdc, summary, contentX+12, contentY+28, contentW-24, 34, 13, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		labels := []string{"‹ Тип", "Тип ›", "− Значение", "+ Значение", "+ Функция", "Удалить функцию", "← Предыдущая", "Следующая →"}
+		labels := []string{"‹ Тип", "Тип ›", "− Значение", "+ Значение"}
 		gap := 8
 		bw := (contentW - gap) / 2
 		for i, label := range labels {
@@ -543,7 +577,9 @@ func commitGraphFullEditorDraft() {
 			}
 			setCurrentScenarioSteps(list)
 		case 15:
-			if app.scenarioSavedDraft {
+			if currentScenarioGraphSession() != nil {
+				syncSelectedGraphTriggerFromFields()
+			} else if app.scenarioSavedDraft {
 				syncScenarioWhenFields()
 			} else {
 				app.settings.Mode = app.selectedMode
@@ -577,7 +613,22 @@ func handleGraphFullEditorClickWithInputs(x, y int32) bool {
 		return true
 	}
 	localX, localY := x-app.graphEditorDX, y-app.graphEditorDY
-	openConditions := app.graphEditorSection == 15 && pointIn(app.modeRects[5], localX, localY)
+	if (app.graphEditorSection == 8 || app.graphEditorSection == 15) && pointIn(app.graphEditorTabRects[0], localX, localY) {
+		if app.graphEditorSection != 15 {
+			commitGraphFullEditorDraft()
+			if node := ensureCurrentScenarioGraph().node(app.graphEditorNodeID); node != nil {
+				openGraphFullEditor(node, 0)
+			}
+		}
+		return true
+	}
+	if (app.graphEditorSection == 8 || app.graphEditorSection == 15) && pointIn(app.graphEditorTabRects[1], localX, localY) {
+		if app.graphEditorSection != 8 {
+			commitGraphFullEditorDraft()
+			openGraphConditionEditor(app.graphEditorNodeID, 0)
+		}
+		return true
+	}
 	graphSection := app.section
 	app.section = app.graphEditorSection
 	onClick(localX, localY)
@@ -588,12 +639,6 @@ func handleGraphFullEditorClickWithInputs(x, y int32) bool {
 		closeGraphFullEditor()
 	} else if resultSection == 4 || resultSection == 8 || resultSection == 9 || resultSection == 14 || resultSection == 15 {
 		app.graphEditorSection = resultSection
-	}
-	if openConditions {
-		// Timing and conditions are two views of the same combined block.
-		syncScenarioWhenFields()
-		syncCurrentGraphFromLegacy()
-		openGraphConditionEditor(app.graphEditorNodeID, -1)
 	}
 	invalidateScenarioGraphWindows()
 	return true
@@ -645,6 +690,13 @@ func handleGraphCompactEditorClick(x, y int32) bool {
 			} else if i == 1 {
 				node.WaitSecs += 10
 			}
+		case graphNodeJunction, graphNodeLogic:
+			if i == 0 {
+				node.Kind = graphNodeJunction
+			} else if i <= 6 {
+				node.Kind = graphNodeLogic
+				node.LogicOp = i - 1
+			}
 		case graphNodeCondition:
 			handleCompactConditionAction(node, i)
 		case graphNodeAction:
@@ -658,11 +710,6 @@ func handleGraphCompactEditorClick(x, y int32) bool {
 }
 
 func handleCompactConditionAction(node *ScenarioGraphNode, action int) {
-	if action == 4 {
-		node.Conditions = append(node.Conditions, AutomationCondition{ID: newAutomationID("cond"), Type: condCPU, Logic: logicAND, Compare: -1, Threshold: 10, HoldSeconds: 30, Enabled: true})
-		app.graphEditorItem = len(node.Conditions) - 1
-		return
-	}
 	if len(node.Conditions) == 0 {
 		return
 	}
@@ -676,22 +723,10 @@ func handleCompactConditionAction(node *ScenarioGraphNode, action int) {
 		node.Conditions[i].Threshold -= 5
 	case 3:
 		node.Conditions[i].Threshold += 5
-	case 5:
-		node.Conditions = append(node.Conditions[:i], node.Conditions[i+1:]...)
-		app.graphEditorItem = max(0, i-1)
-	case 6:
-		app.graphEditorItem = max(0, i-1)
-	case 7:
-		app.graphEditorItem = minInt(len(node.Conditions)-1, i+1)
 	}
 }
 
 func handleCompactStepAction(node *ScenarioGraphNode, action int) {
-	if action == 4 {
-		node.Steps = append(node.Steps, ActionStep{ID: newAutomationID("step"), Type: stepWait, Value: 10})
-		app.graphEditorItem = len(node.Steps) - 1
-		return
-	}
 	if len(node.Steps) == 0 {
 		return
 	}
@@ -705,12 +740,5 @@ func handleCompactStepAction(node *ScenarioGraphNode, action int) {
 		node.Steps[i].Value = max(0, node.Steps[i].Value-5)
 	case 3:
 		node.Steps[i].Value += 5
-	case 5:
-		node.Steps = append(node.Steps[:i], node.Steps[i+1:]...)
-		app.graphEditorItem = max(0, i-1)
-	case 6:
-		app.graphEditorItem = max(0, i-1)
-	case 7:
-		app.graphEditorItem = minInt(len(node.Steps)-1, i+1)
 	}
 }

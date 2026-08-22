@@ -431,10 +431,10 @@ func finishGraphRightButton(x, y int32) {
 
 func graphContextActions() []string {
 	if app.graphSelectedEdgeID != "" && len(selectedGraphNodeIDs()) > 0 {
-		return []string{"Копировать", "Вырезать", "Дублировать", "Удалить блоки", "Удалить соединение", "Вставить", "Выделить всё", "Вписать схему"}
+		return []string{"Настроить соединение", "Копировать", "Вырезать", "Дублировать", "Удалить блоки", "Удалить соединение", "Вставить", "Выделить всё", "Вписать схему"}
 	}
 	if app.graphSelectedEdgeID != "" {
-		return []string{"Удалить соединение", "Вписать схему"}
+		return []string{"Настроить соединение", "Удалить соединение", "Вписать схему"}
 	}
 	if len(selectedGraphNodeIDs()) > 0 {
 		return []string{"Копировать", "Вырезать", "Дублировать", "Удалить", "Вставить", "Выделить всё", "Вписать схему"}
@@ -493,6 +493,8 @@ func handleGraphContextClick(x, y int32) bool {
 			deleteSelectedGraphNodes()
 		case "Удалить соединение":
 			deleteSelectedGraphEdge()
+		case "Настроить соединение":
+			editSelectedGraphConnection(app.graphContextX, app.graphContextY)
 		case "Вставить":
 			pasteGraphSelection()
 		case "Выделить всё":
@@ -506,6 +508,40 @@ func handleGraphContextClick(x, y int32) bool {
 	}
 	app.graphContextOpen = false
 	return pointIn(app.graphContextRect, x, y)
+}
+
+func editSelectedGraphConnection(x, y int32) bool {
+	g := ensureCurrentScenarioGraph()
+	for i, edge := range g.Edges {
+		if edge.ID != app.graphSelectedEdgeID {
+			continue
+		}
+		// If the wire already goes through a compact logic/junction node, edit
+		// that node instead of inserting a second marker on top of it.
+		for _, id := range []string{edge.From, edge.To} {
+			if node := g.node(id); node != nil && (node.Kind == graphNodeLogic || node.Kind == graphNodeJunction) {
+				selectOnlyGraphNode(node.ID)
+				openGraphCompactEditor(node.ID, 0)
+				return true
+			}
+		}
+		z := g.Zoom
+		if z <= 0 {
+			z = 1
+		}
+		junction := newScenarioGraphNode(graphNodeJunction,
+			float64(x-app.graphCanvasRect.Left)/z-g.ViewX-19,
+			float64(y-app.graphCanvasRect.Top)/z-g.ViewY-19)
+		g.Edges = append(g.Edges[:i], g.Edges[i+1:]...)
+		g.Nodes = append(g.Nodes, junction)
+		g.connect(edge.From, edge.FromPort, junction.ID)
+		g.connect(junction.ID, graphPortNext, edge.To)
+		selectOnlyGraphNode(junction.ID)
+		persistCurrentScenarioGraph()
+		openGraphCompactEditor(junction.ID, 0)
+		return true
+	}
+	return false
 }
 
 func handleGraphKeyboard(vk uintptr) bool {

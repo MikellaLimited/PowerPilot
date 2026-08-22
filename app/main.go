@@ -1011,7 +1011,7 @@ type App struct {
 	resourceStatsSortDesc                  bool
 	conditionGroupCollapsed                map[string]bool
 	graphCanvasRect                        RECT
-	graphPaletteRects                      [10]RECT
+	graphPaletteRects                      [4]RECT
 	graphZoomRects                         [3]RECT
 	graphNodeHits                          []GraphNodeHit
 	graphPortHits                          []GraphPortHit
@@ -1065,6 +1065,7 @@ type App struct {
 	graphEditorRect                        RECT
 	graphEditorCloseRect                   RECT
 	graphEditorActionRects                 [10]RECT
+	graphEditorTabRects                    [2]RECT
 	graphEditorText                        uintptr
 	mu                                     sync.Mutex
 	exiting                                bool
@@ -1520,19 +1521,7 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		pDestroyWindow.Call(hwnd)
 		return 0
 	case WM_DESTROY:
-		if app.graphWindow != 0 {
-			if app.graphEditorOpen {
-				if app.graphEditorSection != 0 {
-					commitGraphFullEditorDraft()
-				} else {
-					syncGraphCompactText()
-					persistCurrentScenarioGraph()
-				}
-			}
-			graphWindow := app.graphWindow
-			app.graphWindow = 0
-			pDestroyWindow.Call(graphWindow)
-		}
+		closeAllScenarioGraphSessions()
 		pKillTimer.Call(hwnd, 1)
 		pKillTimer.Call(hwnd, 2)
 		stopMetricSampler()
@@ -2414,11 +2403,7 @@ func layoutControlsLogical(rc RECT) {
 	// Block task flowchart. Saved-task editing uses the same renderer with an isolated draft.
 	if app.section == 7 || app.section == 13 {
 		graphBody := RECT{int32(innerLeft), int32(bodyTop), int32(innerRight), int32(bodyBottom)}
-		if app.graphWindow == 0 {
-			layoutScenarioGraphLauncher(graphBody)
-		} else {
-			layoutScenarioGraphMainPlaceholder(graphBody)
-		}
+		layoutScenarioGraphLauncher(graphBody)
 	}
 	if false && (app.section == 7 || app.section == 13) {
 		app.scenarioBackRect = RECT{}
@@ -2606,10 +2591,18 @@ func layoutControlsLogical(rc RECT) {
 		}
 		app.blockEditorBackRect = RECT{int32(innerLeft), int32(bodyTop + 18), int32(innerLeft + 110), int32(bodyTop + 52)}
 		app.blockEditorDoneRect = RECT{int32(innerRight - 120), int32(bodyTop + 18), int32(innerRight), int32(bodyTop + 52)}
+		tabY := bodyTop + 62
+		tabGap := 8
+		tabW := (innerContentW - tabGap) / 2
+		app.graphEditorTabRects[0] = RECT{int32(innerLeft), int32(tabY), int32(innerLeft + tabW), int32(tabY + 36)}
+		app.graphEditorTabRects[1] = RECT{int32(innerLeft + tabW + tabGap), int32(tabY), int32(innerRight), int32(tabY + 36)}
 		cols := 3
 		gap := 10
 		cw := (innerContentW - gap*2) / 3
-		startY := bodyTop + 82
+		startY := bodyTop + 112
+		for i := range app.modeRects {
+			app.modeRects[i] = RECT{}
+		}
 		for i := 0; i < 6; i++ {
 			row, col := i/cols, i%cols
 			x := innerLeft + col*(cw+gap)
@@ -2625,7 +2618,12 @@ func layoutControlsLogical(rc RECT) {
 		for i := range app.editorTypeRects {
 			app.editorTypeRects[i] = RECT{}
 		}
-		startY := bodyTop + 52
+		tabY := bodyTop + 52
+		tabGap := 8
+		tabW := (innerContentW - tabGap) / 2
+		app.graphEditorTabRects[0] = RECT{int32(innerLeft), int32(tabY), int32(innerLeft + tabW), int32(tabY + 36)}
+		app.graphEditorTabRects[1] = RECT{int32(innerLeft + tabW + tabGap), int32(tabY), int32(innerRight), int32(tabY + 36)}
+		startY := bodyTop + 102
 		basic := []int{condCPU, condGPU, condNetwork, condDisk, condFileStable, condProcessExit}
 		basicCols, basicGap := 3, 7
 		basicW := (innerContentW - basicGap*(basicCols-1)) / basicCols
@@ -4481,6 +4479,9 @@ func currentScenarioAction() int {
 	return app.selectedAction
 }
 func currentScenarioRecurrence() RecurrenceSpec {
+	if n := selectedGraphNode(); n != nil && n.Kind == graphNodeTrigger {
+		return n.Recurrence
+	}
 	if tr := ensureCurrentScenarioGraph().trigger(); tr != nil {
 		return tr.Recurrence
 	}
@@ -4504,6 +4505,10 @@ func loadScenarioWhenInputs() {
 	pSetWindowTextW.Call(app.edits[idScheduleTime], uintptr(unsafe.Pointer(wstr(t.Recurrence.TimeHHMM))))
 }
 func syncScenarioWhenFields() {
+	if currentScenarioGraphSession() != nil {
+		syncSelectedGraphTriggerFromFields()
+		return
+	}
 	if !app.scenarioSavedDraft {
 		syncFields()
 		return
@@ -4578,13 +4583,6 @@ func scenarioDragOffset(kind, idx int) int32 {
 }
 
 func drawScenarioPage(hdc uintptr, body RECT, w int) {
-	if app.graphWindow != 0 {
-		drawScenarioGraphMainPlaceholder(hdc, body)
-		if app.confirmDiscardScenario {
-			drawScenarioDiscardConfirm(hdc, body)
-		}
-		return
-	}
 	drawScenarioGraphLauncher(hdc, body)
 	if app.confirmDiscardScenario {
 		drawScenarioDiscardConfirm(hdc, body)
@@ -4838,8 +4836,10 @@ func drawBlockActionEditor(hdc uintptr, body RECT, w int) {
 func drawBlockWhenEditor(hdc uintptr, body RECT, w int) {
 	drawButton(hdc, app.blockEditorBackRect, "← Назад", false)
 	drawButton(hdc, app.blockEditorDoneRect, "Готово", true)
-	drawText(hdc, "Когда запускать", int(body.Left)+146, int(body.Top)+18, int(body.Right-body.Left)-300, 28, 19, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	names := []string{"Таймер", "Дата и время", "Простой", "После процесса", "Расписание", "По условиям"}
+	drawText(hdc, "Условия", int(body.Left)+146, int(body.Top)+18, int(body.Right-body.Left)-300, 28, 19, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	drawSelectableButton(hdc, app.graphEditorTabRects[0], "Триггеры", true)
+	drawSelectableButton(hdc, app.graphEditorTabRects[1], "Условия", false)
+	names := []string{"Таймер", "Дата и время", "Простой", "После процесса", "Расписание", "Сразу"}
 	for i, r := range app.modeRects {
 		drawSelectableButton(hdc, r, names[i], app.selectedMode == i)
 	}
@@ -4856,13 +4856,15 @@ func drawBlockWhenEditor(hdc uintptr, body RECT, w int) {
 	case 4:
 		label = "Расписание"
 	case 5:
-		label = "Запуск определяется блоками условий ниже"
+		label = "Без задержки"
 	}
 	uiDrawWhenFieldChrome(hdc, app.selectedMode, app.modeRects[:6], body, label)
 	if app.selectedMode == 3 {
 		drawButton(hdc, app.pickRect, "Выбрать процесс", false)
 		proc := app.settings.WatchProcess
-		if app.scenarioSavedDraft {
+		if n := selectedGraphNode(); n != nil && n.Kind == graphNodeTrigger {
+			proc = n.Process
+		} else if app.scenarioSavedDraft {
 			proc = app.savedEditDraft.WatchProcess
 		}
 		if strings.TrimSpace(proc) != "" {
@@ -5124,8 +5126,23 @@ func shiftConditionEditorDynamicRects(dy int32) {
 	app.conditionDelayFieldRect = shiftRectY(app.conditionDelayFieldRect, dy)
 }
 
+func drawEditorFieldLabel(hdc uintptr, label string, field RECT, width int) {
+	if field.Right <= field.Left || field.Bottom <= field.Top {
+		return
+	}
+	if width <= 0 {
+		width = int(field.Right - field.Left)
+	}
+	// One baseline for every editor field: a 16 px label with a fixed 4 px gap.
+	// Basing it on the actual control rect also keeps labels attached to controls
+	// while the expanded-condition form animates.
+	drawText(hdc, label, int(field.Left), int(field.Top)-20, width, 16, 10, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+}
+
 func drawConditionEditor(hdc uintptr, body RECT, w int) {
 	drawText(hdc, "Условие сценария", int(body.Left)+18, int(body.Top)+16, int(body.Right-body.Left)-36, 28, 19, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+	drawSelectableButton(hdc, app.graphEditorTabRects[0], "Триггеры", false)
+	drawSelectableButton(hdc, app.graphEditorTabRects[1], "Условия", true)
 	names := []string{"CPU", "GPU", "Сеть", "Диск", "Файл завершён", "Процесс завершён", "Окно есть", "Окно закрыто", "Окно активно", "Заголовок", "Нет звука", "Батарея", "Питание", "Свободно на диске", "Файлы в папке", "CPU процесса", "GPU процесса", "RAM процесса", "Интернет", "Полный экран", "Диск/устройство"}
 	basicSet := map[int]bool{condCPU: true, condGPU: true, condNetwork: true, condDisk: true, condFileStable: true, condProcessExit: true}
 	for i, r := range app.editorTypeRects {
@@ -5185,9 +5202,9 @@ func drawConditionEditor(hdc uintptr, body RECT, w int) {
 		case condFolderCount:
 			thresholdLabel = "Количество"
 		}
-		drawText(hdc, thresholdLabel, int(app.whenFieldRect.Left), int(app.whenFieldRect.Top)-22, 160, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, thresholdLabel, app.whenFieldRect, 160)
 		roundFill(hdc, app.whenFieldRect, surfaceButtonColor(), 9)
-		drawText(hdc, "Непрерывно, сек", int(app.warningFieldRect.Left), int(app.warningFieldRect.Top)-22, 160, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Непрерывно, сек", app.warningFieldRect, 160)
 		roundFill(hdc, app.warningFieldRect, surfaceButtonColor(), 9)
 		comps := []string{"≤", "≥"}
 		for i, r := range app.editorCompareRects {
@@ -5206,13 +5223,13 @@ func drawConditionEditor(hdc uintptr, body RECT, w int) {
 		} else if app.conditionDraft.Type == condDrivePresent {
 			label, leftOpt, rightOpt = "Диск / устройство", "Отключён", "Подключён"
 		}
-		drawText(hdc, label, int(app.editorCompareRects[0].Left), int(app.editorCompareRects[0].Top)-22, 240, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, label, app.editorCompareRects[0], 240)
 		drawSelectableButton(hdc, app.editorCompareRects[0], leftOpt, app.conditionDraft.Compare <= 0)
 		drawSelectableButton(hdc, app.editorCompareRects[1], rightOpt, app.conditionDraft.Compare > 0)
-		drawText(hdc, "Непрерывно, сек", int(app.warningFieldRect.Left), int(app.warningFieldRect.Top)-22, 160, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Непрерывно, сек", app.warningFieldRect, 160)
 		roundFill(hdc, app.warningFieldRect, surfaceButtonColor(), 9)
 	} else {
-		drawText(hdc, "Непрерывно / стабильно, сек", int(app.warningFieldRect.Left), int(app.warningFieldRect.Top)-22, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Непрерывно / стабильно, сек", app.warningFieldRect, 220)
 		roundFill(hdc, app.warningFieldRect, surfaceButtonColor(), 9)
 	}
 	label := "Путь к файлу или папке"
@@ -5240,7 +5257,7 @@ func drawConditionEditor(hdc uintptr, body RECT, w int) {
 			label = "Примечание (необязательно)"
 		}
 	}
-	drawText(hdc, label, int(app.timeFieldRects[0].Left), int(app.timeFieldRects[0].Top)-22, max(260, int(app.timeFieldRects[0].Right-app.timeFieldRects[0].Left)), 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawEditorFieldLabel(hdc, label, app.timeFieldRects[0], max(260, int(app.timeFieldRects[0].Right-app.timeFieldRects[0].Left)))
 	roundFill(hdc, app.timeFieldRects[0], surfaceButtonColor(), 9)
 	if app.conditionDraft.Type == condFileStable {
 		drawButton(hdc, app.editorBrowseRect, "Обзор…", false)
@@ -5297,35 +5314,35 @@ func drawStepEditor(hdc uintptr, body RECT, w int) {
 	fieldY := int(app.stepTypeRects[9].Bottom) + 11
 	switch app.stepDraft.Type {
 	case stepCloseProcesses:
-		drawText(hdc, "Процессы этого шага", int(app.editorBrowseRect.Left), int(app.editorBrowseRect.Top)-22, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Процессы этого шага", app.editorBrowseRect, 220)
 		drawButton(hdc, app.editorBrowseRect, "Выбрать процессы", false)
 		drawText(hdc, processCountPhrase(len(app.stepDraft.Processes)), int(app.editorBrowseRect.Right)+12, int(app.editorBrowseRect.Top), max(100, int(body.Right-app.editorBrowseRect.Right)-28), int(app.editorBrowseRect.Bottom-app.editorBrowseRect.Top), 10, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	case stepWait:
-		drawText(hdc, "Секунды ожидания", int(app.whenFieldRect.Left), int(app.whenFieldRect.Top)-22, 180, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Секунды ожидания", app.whenFieldRect, 180)
 		if app.whenFieldRect.Right > app.whenFieldRect.Left {
 			roundFill(hdc, app.whenFieldRect, surfaceButtonColor(), 9)
 		}
 	case stepSetVolume, stepMute:
-		drawText(hdc, "Громкость", int(app.powerPlanRects[0].Left), int(app.powerPlanRects[0].Top)-22, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Громкость", app.powerPlanRects[0], 220)
 		audioModes := []string{"Задать %", "Выключить звук", "Включить звук"}
 		for i, rr := range app.powerPlanRects {
 			active := (i == 0 && app.stepDraft.Type == stepSetVolume) || (i == 1 && app.stepDraft.Type == stepMute && app.stepDraft.Value != 0) || (i == 2 && app.stepDraft.Type == stepMute && app.stepDraft.Value == 0)
 			drawSelectableButton(hdc, rr, audioModes[i], active)
 		}
 		if app.stepDraft.Type == stepSetVolume && app.whenFieldRect.Right > app.whenFieldRect.Left {
-			drawText(hdc, "Уровень, %", int(body.Left)+18, int(app.whenFieldRect.Top)-20, 120, 18, 10, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+			drawEditorFieldLabel(hdc, "Уровень, %", app.whenFieldRect, 120)
 			roundFill(hdc, app.whenFieldRect, surfaceButtonColor(), 9)
 		}
 	case stepLockWorkstation:
 		drawText(hdc, "Windows будет заблокирован, сценарий продолжит работу в фоне.", int(body.Left)+18, fieldY+20, int(body.Right-body.Left)-36, 36, 11, 500, theme.muted, DT_LEFT|DT_VCENTER)
 	case stepPowerPlan:
-		drawText(hdc, "План электропитания", int(app.powerPlanRects[0].Left), int(app.powerPlanRects[0].Top)-22, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "План электропитания", app.powerPlanRects[0], 220)
 		planNames := []string{"Энергосбережение", "Сбалансированный", "Высокая производительность"}
 		for i, rr := range app.powerPlanRects {
 			drawSelectableButton(hdc, rr, planNames[i], clampInt(app.stepDraft.Value, 0, 2) == i)
 		}
 	case stepProcessPriority:
-		drawText(hdc, "Процесс и приоритет", int(app.timeFieldRects[0].Left), int(app.timeFieldRects[0].Top)-22, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Процесс и приоритет", app.timeFieldRects[0], 220)
 		if app.timeFieldRects[0].Right > app.timeFieldRects[0].Left {
 			roundFill(hdc, app.timeFieldRects[0], surfaceButtonColor(), 9)
 		}
@@ -5335,7 +5352,7 @@ func drawStepEditor(hdc uintptr, body RECT, w int) {
 			drawSelectableButton(hdc, rr, prioNames[i], clampInt(app.stepDraft.Value, 0, 2) == i)
 		}
 	case stepRunCommand:
-		drawText(hdc, "Команда или программа", int(app.timeFieldRects[0].Left), int(app.timeFieldRects[0].Top)-22, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Команда или программа", app.timeFieldRects[0], 220)
 		if app.timeFieldRects[0].Right > app.timeFieldRects[0].Left {
 			roundFill(hdc, app.timeFieldRects[0], surfaceButtonColor(), 9)
 		}
@@ -5343,22 +5360,22 @@ func drawStepEditor(hdc uintptr, body RECT, w int) {
 			drawButton(hdc, app.editorBrowseRect, "Выбрать файл…", false)
 		}
 	case stepNotify:
-		drawText(hdc, "Текст уведомления", int(app.timeFieldRects[0].Left), int(app.timeFieldRects[0].Top)-22, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Текст уведомления", app.timeFieldRects[0], 220)
 		if app.timeFieldRects[0].Right > app.timeFieldRects[0].Left {
 			roundFill(hdc, app.timeFieldRects[0], surfaceButtonColor(), 9)
 		}
 	}
 
-	drawText(hdc, "При ошибке", int(body.Left)+18, int(app.stepErrorRects[0].Top)-22, 150, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawEditorFieldLabel(hdc, "При ошибке", app.stepErrorRects[0], 150)
 	errNames := []string{"Продолжить", "Остановить", "Повторить"}
 	for i, r := range app.stepErrorRects {
 		drawSelectableButton(hdc, r, errNames[i], app.stepDraft.OnError == i)
 	}
 	if app.stepDraft.OnError == 2 {
-		drawText(hdc, "Повторов", int(app.stepRetryFieldRect.Left), int(app.stepRetryFieldRect.Top)-20, 90, 18, 10, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Повторов", app.stepRetryFieldRect, 90)
 		roundFill(hdc, app.stepRetryFieldRect, surfaceButtonColor(), 8)
 	}
-	drawText(hdc, "Пауза после, сек", int(app.stepDelayFieldRect.Left), int(app.stepDelayFieldRect.Top)-20, 150, 18, 10, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawEditorFieldLabel(hdc, "Пауза после, сек", app.stepDelayFieldRect, 150)
 	roundFill(hdc, app.stepDelayFieldRect, surfaceButtonColor(), 8)
 	if reveal {
 		d2dResetTransform()
@@ -8455,7 +8472,9 @@ func onClick(x, y int32) {
 		}
 		for i, r := range app.blockActionChoiceRects {
 			if pointIn(r, x, y) {
-				if app.scenarioSavedDraft {
+				if n := selectedGraphNode(); currentScenarioGraphSession() != nil && n != nil && n.Kind == graphNodeFinish {
+					n.Action = i
+				} else if app.scenarioSavedDraft {
 					app.savedEditDraft.Action = i
 				} else {
 					app.selectedAction = i
@@ -8501,7 +8520,11 @@ func onClick(x, y int32) {
 				}
 				syncScenarioWhenFields()
 				app.selectedMode = i
-				if app.scenarioSavedDraft {
+				if currentScenarioGraphSession() != nil {
+					if n := selectedGraphNode(); n != nil && n.Kind == graphNodeTrigger {
+						n.Mode = i
+					}
+				} else if app.scenarioSavedDraft {
 					app.savedEditDraft.Mode = i
 				} else {
 					app.settings.Mode = i
@@ -8518,7 +8541,9 @@ func onClick(x, y int32) {
 			return
 		}
 		if app.selectedMode == 3 && pointIn(app.processClearRect, x, y) {
-			if app.scenarioSavedDraft {
+			if n := selectedGraphNode(); currentScenarioGraphSession() != nil && n != nil && n.Kind == graphNodeTrigger {
+				n.Process = ""
+			} else if app.scenarioSavedDraft {
 				app.savedEditDraft.WatchProcess = ""
 			} else {
 				app.settings.WatchProcess = ""
@@ -8532,7 +8557,9 @@ func onClick(x, y int32) {
 		if app.selectedMode == 4 {
 			for i, r := range app.recurrenceKindRects {
 				if pointIn(r, x, y) {
-					if app.scenarioSavedDraft {
+					if n := selectedGraphNode(); currentScenarioGraphSession() != nil && n != nil && n.Kind == graphNodeTrigger {
+						n.Recurrence.Kind = i
+					} else if app.scenarioSavedDraft {
 						app.savedEditDraft.Recurrence.Kind = i
 					} else {
 						app.settings.Recurrence.Kind = i
@@ -8542,14 +8569,16 @@ func onClick(x, y int32) {
 					return
 				}
 			}
-			recKind := app.settings.Recurrence.Kind
-			if app.scenarioSavedDraft {
+			recKind := currentScenarioRecurrence().Kind
+			if currentScenarioGraphSession() == nil && app.scenarioSavedDraft {
 				recKind = app.savedEditDraft.Recurrence.Kind
 			}
 			if recKind == 2 {
 				for i, r := range app.recurrenceDayRects {
 					if pointIn(r, x, y) {
-						if app.scenarioSavedDraft {
+						if n := selectedGraphNode(); currentScenarioGraphSession() != nil && n != nil && n.Kind == graphNodeTrigger {
+							n.Recurrence.Days[i] = !n.Recurrence.Days[i]
+						} else if app.scenarioSavedDraft {
 							app.savedEditDraft.Recurrence.Days[i] = !app.savedEditDraft.Recurrence.Days[i]
 						} else {
 							app.settings.Recurrence.Days[i] = !app.settings.Recurrence.Days[i]
@@ -10034,6 +10063,16 @@ func openProcessPicker(mode int) {
 func toggleSelectedProcess(name string) {
 	target := strings.ToLower(name)
 	if app.processPickerMode == 2 {
+		if node := selectedGraphNode(); currentScenarioGraphSession() != nil && node != nil && node.Kind == graphNodeTrigger {
+			if strings.EqualFold(node.Process, name) {
+				node.Process = ""
+			} else {
+				node.Process = name
+			}
+			pSetWindowTextW.Call(app.edits[idWatchProcess], uintptr(unsafe.Pointer(wstr(node.Process))))
+			persistCurrentScenarioGraph()
+			return
+		}
 		if strings.EqualFold(app.settings.WatchProcess, name) {
 			app.settings.WatchProcess = ""
 		} else {
@@ -10131,6 +10170,9 @@ func processSelectedInCurrentPicker(name string) bool {
 	case 1:
 		return contains(app.settings.SafetyProcesses)
 	case 2:
+		if node := selectedGraphNode(); currentScenarioGraphSession() != nil && node != nil && node.Kind == graphNodeTrigger {
+			return strings.EqualFold(node.Process, name)
+		}
 		return strings.EqualFold(app.settings.WatchProcess, name)
 	case 3:
 		return strings.EqualFold(app.conditionDraft.Text, name)

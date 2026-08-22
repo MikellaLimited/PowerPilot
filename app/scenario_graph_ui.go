@@ -35,6 +35,9 @@ func scenarioGraphInteractionEnabled() bool {
 }
 
 func currentScenarioGraph() *ScenarioGraph {
+	if session := currentScenarioGraphSession(); session != nil {
+		return &session.Graph
+	}
 	if app.scenarioSavedDraft {
 		return &app.savedEditDraft.Graph
 	}
@@ -58,6 +61,10 @@ func ensureCurrentScenarioGraph() *ScenarioGraph {
 }
 
 func persistCurrentScenarioGraph() {
+	if session := currentScenarioGraphSession(); session != nil {
+		invalidateScenarioGraphWindows()
+		return
+	}
 	if app.scenarioSavedDraft {
 		invalidateScenarioGraphWindows()
 		return
@@ -82,6 +89,13 @@ func scenarioGraphInputWindow() uintptr {
 }
 
 func syncCurrentGraphFromLegacy() {
+	// Detached editors own their graph state. Their full-screen forms write
+	// directly into the selected node, so copying the main window settings here
+	// would leak values between independently opened editor windows.
+	if currentScenarioGraphSession() != nil {
+		persistCurrentScenarioGraph()
+		return
+	}
 	g := ensureCurrentScenarioGraph()
 	tr := g.trigger()
 	if selected := selectedGraphNode(); selected != nil && selected.Kind == graphNodeTrigger {
@@ -134,7 +148,7 @@ func syncLegacyFromCurrentGraph() TaskState {
 
 func layoutScenarioGraphEditor(body RECT, detached bool) {
 	left := int(body.Left) + 14
-	top := int(body.Top) + 62
+	top := int(body.Top) + 58
 	right := int(body.Right) - 14
 	bottom := int(body.Bottom) - 14
 	if !detached {
@@ -161,12 +175,15 @@ func layoutScenarioGraphEditor(body RECT, detached bool) {
 	if !detached {
 		app.graphDetachRect = RECT{body.Right - 310, body.Top + 12, body.Right - 136, body.Top + 46}
 	}
-	paletteW := 142
-	app.graphCanvasRect = RECT{int32(left + paletteW + 10), int32(top), int32(right), int32(bottom)}
-	paletteTop := top + 24
+	app.graphCanvasRect = RECT{int32(left), int32(top), int32(right), int32(bottom)}
+	paletteTop := int(body.Top) + 14
+	paletteLeft := left
+	available := max(240, right-paletteLeft-350)
+	paletteGap := 5
+	paletteW := minInt(88, max(58, (available-paletteGap*3)/4))
 	for i := range app.graphPaletteRects {
-		y := paletteTop + i*42
-		app.graphPaletteRects[i] = RECT{int32(left), int32(y), int32(left + paletteW), int32(y + 34)}
+		x := paletteLeft + i*(paletteW+paletteGap)
+		app.graphPaletteRects[i] = RECT{int32(x), int32(paletteTop), int32(x + paletteW), int32(paletteTop + 30)}
 	}
 	zoomWidths := []int{36, 36, 78}
 	zoomX := right - 162
@@ -179,12 +196,12 @@ func layoutScenarioGraphEditor(body RECT, detached bool) {
 func graphNodeHeight(n ScenarioGraphNode) float64 {
 	count := 1
 	if n.Kind == graphNodeTrigger {
-		count = 1 + len(n.Conditions)
+		count = 2
 	} else if n.Kind == graphNodeCondition {
-		count = max(len(n.Conditions), 1)
+		count = 1
 	}
 	if n.Kind == graphNodeAction {
-		count = max(len(n.Steps), 1)
+		count = 1
 	}
 	return float64(74 + minInt(count, 4)*24)
 }
@@ -198,7 +215,7 @@ func graphNodeScreenRect(g *ScenarioGraph, n ScenarioGraphNode) RECT {
 	y := float64(app.graphCanvasRect.Top) + (n.Y+g.ViewY)*z
 	w := 224.0 * z
 	h := graphNodeHeight(n) * z
-	if n.Kind == graphNodeJunction {
+	if n.Kind == graphNodeJunction || n.Kind == graphNodeLogic {
 		w, h = 38*z, 38*z
 	}
 	return RECT{int32(math.Round(x)), int32(math.Round(y)), int32(math.Round(x + w)), int32(math.Round(y + h))}
@@ -206,7 +223,7 @@ func graphNodeScreenRect(g *ScenarioGraph, n ScenarioGraphNode) RECT {
 
 func graphOutputPoint(g *ScenarioGraph, n ScenarioGraphNode, port string) (float32, float32) {
 	r := graphNodeScreenRect(g, n)
-	if n.Kind == graphNodeJunction {
+	if n.Kind == graphNodeJunction || n.Kind == graphNodeLogic {
 		return float32(r.Right), float32((r.Top + r.Bottom) / 2)
 	}
 	ports := graphNodePorts(n.Kind)
@@ -260,16 +277,19 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	app.graphNodeHits = app.graphNodeHits[:0]
 	app.graphPortHits = app.graphPortHits[:0]
 	app.graphFunctionHits = app.graphFunctionHits[:0]
-	drawText(hdc, "Редактор сценария", int(body.Left)+18, int(body.Top)+14, 290, 30, 20, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	titleX := int(body.Left) + 18
+	if last := app.graphPaletteRects[len(app.graphPaletteRects)-1]; last.Right > 0 {
+		titleX = int(last.Right) + 12
+	}
+	drawText(hdc, "Редактор сценария", titleX, int(body.Top)+14, max(150, int(app.previewRect.Left)-titleX-10), 30, 20, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	drawButton(hdc, app.previewRect, "Проверить", false)
 	if !detached {
 		drawButton(hdc, app.graphDetachRect, "Открыть отдельно", false)
 	}
-	labels := []string{"+ Триггер и условия", "+ Действия", "+ Ожидание", "+ Завершение", "+ И", "+ ИЛИ", "+ НЕ", "+ XOR", "+ НЕ-И", "+ НЕ-ИЛИ"}
+	labels := []string{"+ Усл.", "+ Действ.", "+ Пауза", "+ Финал"}
 	for i, r := range app.graphPaletteRects {
 		drawButton(hdc, r, labels[i], false)
 	}
-	drawText(hdc, "Блоки", int(app.graphPaletteRects[0].Left), int(app.graphPaletteRects[0].Top)-24, 120, 18, 12, 650, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	canvas := app.graphCanvasRect
 	roundFill(hdc, canvas, blendColor(theme.bg, surfacePanelColor(), .36), 14)
 	if ui2d.active {
@@ -353,7 +373,7 @@ func drawScenarioGraphNode(hdc uintptr, g *ScenarioGraph, n ScenarioGraphNode) {
 	z := maxFloat(.1, g.Zoom)
 	scaled := func(value, minimum int) int32 { return int32(max(minimum, int(float64(value)*z+.5))) }
 	fillColor := graphNodeColor(n.Kind)
-	if n.Kind == graphNodeJunction {
+	if n.Kind == graphNodeJunction || n.Kind == graphNodeLogic {
 		radius := (r.Right - r.Left) / 2
 		if radius < 3 {
 			radius = 3
@@ -361,6 +381,9 @@ func drawScenarioGraphNode(hdc uintptr, g *ScenarioGraph, n ScenarioGraphNode) {
 		roundFill(hdc, r, fillColor, radius)
 		if ui2d.active {
 			outline, stroke := theme.accent2, float32(1)
+			if n.Kind == graphNodeLogic {
+				outline = rgb(171, 106, 255)
+			}
 			if selected {
 				stroke = 2.2
 			}
@@ -378,6 +401,11 @@ func drawScenarioGraphNode(hdc uintptr, g *ScenarioGraph, n ScenarioGraphNode) {
 		roundFill(hdc, inRect, theme.text, pr)
 		roundFill(hdc, outRect, theme.accent2, pr)
 		app.graphPortHits = append(app.graphPortHits, GraphPortHit{NodeID: n.ID, Input: true, Rect: inRect}, GraphPortHit{NodeID: n.ID, Port: graphPortNext, Rect: outRect})
+		label := "•"
+		if n.Kind == graphNodeLogic {
+			label = graphLogicName(n.LogicOp)
+		}
+		drawText(hdc, label, int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), max(3, int(8*z)), 700, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 		return
 	}
 	roundFill(hdc, r, fillColor, scaled(12, 3))
@@ -392,11 +420,7 @@ func drawScenarioGraphNode(hdc uintptr, g *ScenarioGraph, n ScenarioGraphNode) {
 	headerH := scaled(34, 12)
 	header := RECT{r.Left, r.Top, r.Right, r.Top + headerH}
 	deleteR := RECT{}
-	addBottomPad := scaled(6, 2)
-	addHeight := scaled(20, 7)
-	horizontalInset := scaled(8, 3)
-	addR := RECT{r.Left + horizontalInset, r.Bottom - addBottomPad - addHeight, r.Right - horizontalInset, r.Bottom - addBottomPad}
-	app.graphNodeHits = append(app.graphNodeHits, GraphNodeHit{ID: n.ID, Rect: r, Header: header, Delete: deleteR, Add: addR})
+	app.graphNodeHits = append(app.graphNodeHits, GraphNodeHit{ID: n.ID, Rect: r, Header: header, Delete: deleteR})
 	titleInset, titleTop := scaled(12, 4), scaled(5, 2)
 	title := graphNodeKindName(n.Kind)
 	if n.Kind == graphNodeLogic {
@@ -408,12 +432,8 @@ func drawScenarioGraphNode(hdc uintptr, g *ScenarioGraph, n ScenarioGraphNode) {
 	switch n.Kind {
 	case graphNodeTrigger:
 		items = append(items, graphTriggerSummary(n))
-		for _, c := range n.Conditions {
-			if c.Type == condGroup {
-				items = append(items, "Составная группа")
-			} else {
-				items = append(items, conditionSummary(c))
-			}
+		if len(n.Conditions) > 0 {
+			items = append(items, conditionSummary(n.Conditions[0]))
 		}
 		itemKind = 1
 	case graphNodeCondition:
@@ -427,8 +447,8 @@ func drawScenarioGraphNode(hdc uintptr, g *ScenarioGraph, n ScenarioGraphNode) {
 		}
 	case graphNodeAction:
 		itemKind = 2
-		for _, st := range n.Steps {
-			items = append(items, stepSummary(st))
+		if len(n.Steps) > 0 {
+			items = append(items, stepSummary(n.Steps[0]))
 		}
 	case graphNodeWait:
 		itemKind = 3
@@ -437,7 +457,7 @@ func drawScenarioGraphNode(hdc uintptr, g *ScenarioGraph, n ScenarioGraphNode) {
 		items = append(items, graphNodeSummary(n))
 	}
 	if len(items) == 0 {
-		items = []string{"Нажми +, чтобы добавить функцию"}
+		items = []string{"Дважды нажми для настройки"}
 	}
 	rowY := r.Top + headerH + scaled(5, 2)
 	rowH := scaled(22, 6)
@@ -452,9 +472,6 @@ func drawScenarioGraphNode(hdc uintptr, g *ScenarioGraph, n ScenarioGraphNode) {
 			}
 			app.graphFunctionHits = append(app.graphFunctionHits, GraphFunctionHit{NodeID: n.ID, Kind: itemKind, Index: index, Rect: rr})
 		}
-	}
-	if n.Kind == graphNodeTrigger || n.Kind == graphNodeCondition || n.Kind == graphNodeAction {
-		drawText(hdc, "+ Добавить функцию", int(addR.Left), int(addR.Top), int(addR.Right-addR.Left), int(addR.Bottom-addR.Top), max(3, int(9*z)), 600, theme.accent2, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
 	inX, inY := graphInputPoint(g, n)
 	portRadius := scaled(7, 2)
@@ -489,7 +506,7 @@ func addGraphNode(kind int) {
 }
 
 func addGraphPaletteNode(index int) {
-	kind, logicOp := graphNodeTrigger, graphLogicAND
+	kind := graphNodeTrigger
 	switch index {
 	case 0:
 		kind = graphNodeTrigger
@@ -499,28 +516,10 @@ func addGraphPaletteNode(index int) {
 		kind = graphNodeWait
 	case 3:
 		kind = graphNodeFinish
-	case 4:
-		kind, logicOp = graphNodeLogic, graphLogicAND
-	case 5:
-		kind, logicOp = graphNodeLogic, graphLogicOR
-	case 6:
-		kind, logicOp = graphNodeLogic, graphLogicNOT
-	case 7:
-		kind, logicOp = graphNodeLogic, graphLogicXOR
-	case 8:
-		kind, logicOp = graphNodeLogic, graphLogicNAND
-	case 9:
-		kind, logicOp = graphNodeLogic, graphLogicNOR
 	default:
 		return
 	}
 	addGraphNode(kind)
-	if kind == graphNodeLogic {
-		if n := selectedGraphNode(); n != nil {
-			n.LogicOp = logicOp
-			persistCurrentScenarioGraph()
-		}
-	}
 }
 
 func connectGraphWireToEdge(g *ScenarioGraph, edgeID, from, port string, x, y int32) bool {
@@ -574,11 +573,10 @@ func handleScenarioGraphClick(x, y int32) bool {
 	}
 	g := ensureCurrentScenarioGraph()
 	if !scenarioGraphDetachedInput && pointIn(app.graphDetachRect, x, y) {
-		openScenarioGraphWindow()
+		if !closeScenarioGraphSessionsForCurrentTarget() {
+			openScenarioGraphWindow()
+		}
 		return true
-	}
-	if app.graphWindow != 0 && !scenarioGraphDetachedInput {
-		return false
 	}
 	if handleGraphCompactEditorClick(x, y) || handleGraphContextClick(x, y) {
 		return true
