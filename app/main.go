@@ -22,7 +22,7 @@ import (
 
 // PowerPilot 0.4.0 - Win32 + Direct2D/DirectWrite, no external runtime.
 
-const appVersion = "0.8.2"
+const appVersion = "0.8.3"
 const normalMinClientW = 640
 const normalMinClientH = 650
 const miniClientW = 500
@@ -6437,6 +6437,38 @@ func drawDeleteConfirmation(hdc uintptr, body RECT, task SavedTask) {
 	drawOutlinedButton(hdc, app.confirmDeleteYesRect, "Удалить", theme.danger)
 }
 
+func animateConditionCatalog() bool {
+	if !app.conditionCatalogAnimating {
+		return false
+	}
+	// Time-based catalogue animation. Geometry is recalculated from one authoritative
+	// progress value, but native EDIT HWNDs remain hidden for the whole transition.
+	duration := 360 * time.Millisecond
+	if app.settings.AnimationMode == 1 {
+		duration = 280 * time.Millisecond
+	}
+	if app.settings.AnimationMode == 2 {
+		duration = time.Millisecond
+	}
+	p := float64(time.Since(app.conditionCatalogStarted)) / float64(duration)
+	p = clampFloat(p, 0, 1)
+	// smootherstep: zero velocity and zero acceleration at both ends.
+	e := p * p * p * (p*(p*6-15) + 10)
+	app.conditionCatalogAnim = app.conditionCatalogFrom + (app.conditionCatalogTarget-app.conditionCatalogFrom)*e
+	if app.section == 8 || (app.graphWindow != 0 && app.graphEditorSection == 8) {
+		newTop := app.conditionCatalogBaseMoreY + int32(float64(app.conditionCatalogExtraFullH)*app.conditionCatalogAnim)
+		shiftConditionEditorDynamicRects(newTop - app.conditionMoreRect.Top)
+	}
+	if p >= 1 {
+		app.conditionCatalogAnim = app.conditionCatalogTarget
+		app.conditionCatalogAnimating = false
+		if app.section == 8 {
+			positionConditionEditorInputs(true)
+		}
+	}
+	return true
+}
+
 func animate() {
 	changed := false
 	for i := 0; i < 4; i++ {
@@ -6522,45 +6554,7 @@ func animate() {
 		}
 	}
 
-	if app.conditionCatalogAnimating {
-		// Time-based catalogue animation.  Geometry is recalculated from one authoritative
-		// progress value, but native EDIT HWNDs remain hidden for the whole transition.
-		// Together with the off-screen frame compositor this prevents both parent-surface
-		// tearing and child-HWND flashes.
-		duration := 360 * time.Millisecond
-		if app.settings.AnimationMode == 1 {
-			duration = 280 * time.Millisecond
-		}
-		if app.settings.AnimationMode == 2 {
-			duration = time.Millisecond
-		}
-		p := float64(time.Since(app.conditionCatalogStarted)) / float64(duration)
-		if p < 0 {
-			p = 0
-		}
-		if p > 1 {
-			p = 1
-		}
-		// smootherstep: zero velocity and zero acceleration at both ends.
-		e := p * p * p * (p*(p*6-15) + 10)
-		app.conditionCatalogAnim = app.conditionCatalogFrom + (app.conditionCatalogTarget-app.conditionCatalogFrom)*e
-		if app.section == 8 || (app.graphWindow != 0 && app.graphEditorSection == 8) {
-			// Only the moving condition-editor geometry changes during the transition.
-			// Native EDITs were hidden once at animation start; repeatedly hiding them
-			// here caused the close-only flash on some Windows builds.
-			newTop := app.conditionCatalogBaseMoreY + int32(float64(app.conditionCatalogExtraFullH)*app.conditionCatalogAnim)
-			delta := newTop - app.conditionMoreRect.Top
-			shiftConditionEditorDynamicRects(delta)
-		}
-		if p >= 1 {
-			app.conditionCatalogAnim = app.conditionCatalogTarget
-			app.conditionCatalogAnimating = false
-			if app.section == 8 {
-				// Do not relayout the entire application on the terminal frame: that toggles
-				// every child HWND and was the remaining source of collapse flicker.
-				positionConditionEditorInputs(true)
-			}
-		}
+	if animateConditionCatalog() {
 		changed = true
 	}
 

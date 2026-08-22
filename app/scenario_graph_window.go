@@ -17,6 +17,8 @@ var (
 	graphEditBrushColor        uint32
 )
 
+const scenarioGraphAnimationTimerID = 3
+
 func scenarioGraphEditBrush() uintptr {
 	color := surfaceButtonColor()
 	if graphEditBrush == 0 || graphEditBrushColor != color {
@@ -68,6 +70,7 @@ func openScenarioGraphWindow() {
 		return
 	}
 	app.graphWindow = hwnd
+	pSetTimer.Call(hwnd, scenarioGraphAnimationTimerID, 10, 0)
 	app.graphTitleHover = -1
 	applyRoundedWindowCorners(hwnd)
 	if app.appIcon != 0 {
@@ -225,6 +228,11 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 	case WM_PAINT:
 		paintScenarioGraphWindow(hwnd)
 		return 0
+	case WM_TIMER:
+		if wParam == scenarioGraphAnimationTimerID && animateConditionCatalog() {
+			pInvalidateRect.Call(hwnd, 0, 0)
+		}
+		return 0
 	case WM_ERASEBKGND:
 		return 1
 	case WM_CTLCOLOREDIT:
@@ -328,6 +336,7 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 		return 0
 	case WM_DESTROY:
 		if app.graphWindow == hwnd {
+			pKillTimer.Call(hwnd, scenarioGraphAnimationTimerID)
 			if graphEditBrush != 0 {
 				pDeleteObject.Call(graphEditBrush)
 				graphEditBrush, graphEditBrushColor = 0, 0
