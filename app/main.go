@@ -269,6 +269,7 @@ const (
 	EN_SETFOCUS     = 0x0100
 	EN_KILLFOCUS    = 0x0200
 	EN_CHANGE       = 0x0300
+	EM_GETSEL       = 0x00B0
 	EM_SETLIMITTEXT = 0x00C5
 	EM_SETSEL       = 0x00B1
 	EM_SETCUEBANNER = 0x1501
@@ -1594,6 +1595,7 @@ func createControls(hwnd uintptr) {
 	}
 	edit(idIdleMinutes, strconv.Itoa(max(app.settings.IdleMinutes, 30)), true)
 	edit(idWatchProcess, app.settings.WatchProcess, false)
+	pSendMessageW.Call(app.edits[idWatchProcess], EM_SETCUEBANNER, 1, uintptr(unsafe.Pointer(wstr("Введите имя процесса…"))))
 	edit(idWarning, strconv.Itoa(max(app.settings.WarningSeconds, 60)), true)
 	edit(idScheduleTime, app.settings.Recurrence.TimeHHMM, false)
 	edit(idCondThreshold, "10", false)
@@ -1601,6 +1603,8 @@ func createControls(hwnd uintptr) {
 	edit(idCondText, "", false)
 	edit(idStepValue, "10", true)
 	edit(idStepText, "", false)
+	pSendMessageW.Call(app.edits[idCondText], EM_SETCUEBANNER, 1, uintptr(unsafe.Pointer(wstr("Введите значение или выберите…"))))
+	pSendMessageW.Call(app.edits[idStepText], EM_SETCUEBANNER, 1, uintptr(unsafe.Pointer(wstr("Введите параметр…"))))
 	edit(idSafetyIdle, strconv.Itoa(max(app.settings.SafetyIdleMinutes, 5)), true)
 	edit(idSoundVolume, strconv.Itoa(clampInt(app.settings.SoundVolume, 0, 100)), true)
 	pSendMessageW.Call(app.edits[idSoundVolume], EM_SETLIMITTEXT, 3, 0)
@@ -6659,6 +6663,13 @@ func animate() {
 				app.historyScrollPx = app.historyScrollTarget
 			}
 			scrolled = old != app.historyScrollPx
+		case app.graphWindow != 0 && app.graphEditorOpen && app.graphEditorSection == 4:
+			old := app.processScrollPx
+			app.processScrollPx += (app.processScrollTarget - app.processScrollPx) * scrollStep
+			if abs(app.processScrollPx-app.processScrollTarget) < .08 {
+				app.processScrollPx = app.processScrollTarget
+			}
+			scrolled = old != app.processScrollPx
 		case app.section == 4:
 			old := app.processScrollPx
 			app.processScrollPx += (app.processScrollTarget - app.processScrollPx) * scrollStep
@@ -6689,7 +6700,14 @@ func animate() {
 			scrolled = old != app.savedScrollPx
 		}
 		if scrolled {
-			updateScrollGeometry()
+			if app.graphWindow != 0 && app.graphEditorOpen && app.graphEditorSection == 4 {
+				oldSection := app.section
+				app.section = 4
+				updateScrollGeometry()
+				app.section = oldSection
+			} else {
+				updateScrollGeometry()
+			}
 			changed = true
 		}
 	}

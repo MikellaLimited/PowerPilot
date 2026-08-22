@@ -339,6 +339,45 @@ func prepareGraphFullEditorLayout(body RECT) (RECT, int) {
 	app.graphEditorRect = RECT{int32(x), int32(y), int32(x + panelW), int32(y + panelH)}
 	app.graphEditorLegacyBody = legacy
 	app.graphEditorDX, app.graphEditorDY = int32(x)-legacy.Left, int32(y)-legacy.Top
+	graphInputs := make(map[uintptr]bool, len(allGraphFullEditorInputIDs()))
+	for _, id := range allGraphFullEditorInputIDs() {
+		if h := app.edits[id]; h != 0 {
+			graphInputs[h] = true
+		}
+	}
+	type preservedEdit struct {
+		hwnd    uintptr
+		rect    RECT
+		visible bool
+	}
+	preserved := make([]preservedEdit, 0, len(app.edits))
+	for _, h := range app.edits {
+		if h == 0 || graphInputs[h] {
+			continue
+		}
+		var wr RECT
+		pGetWindowRect.Call(h, uintptr(unsafe.Pointer(&wr)))
+		pt := POINT{X: wr.Left, Y: wr.Top}
+		if parent, _, _ := pGetParentGraphEditor.Call(h); parent != 0 {
+			pScreenToClient.Call(parent, uintptr(unsafe.Pointer(&pt)))
+		}
+		visible, _, _ := pIsWindowVisible.Call(h)
+		preserved = append(preserved, preservedEdit{
+			hwnd:    h,
+			rect:    RECT{pt.X, pt.Y, pt.X + wr.Right - wr.Left, pt.Y + wr.Bottom - wr.Top},
+			visible: visible != 0,
+		})
+	}
+	focused, _, _ := pGetFocus.Call()
+	restoreFocus := false
+	selection := uintptr(0)
+	for _, h := range app.edits {
+		if h == focused {
+			restoreFocus = true
+			selection, _, _ = pSendMessageW.Call(focused, EM_GETSEL, 0, 0)
+			break
+		}
+	}
 	// The legacy EDIT controls are shared with the main window. They may already
 	// be children of the detached graph window from the previous paint. Always
 	// return them to the coordinate space layoutControls expects before laying
@@ -350,6 +389,23 @@ func prepareGraphFullEditorLayout(body RECT) (RECT, int) {
 	layoutControls(app.hwnd)
 	app.section = oldSection
 	positionGraphFullEditorInputs()
+	// layoutControls is reused to calculate the legacy editor geometry, but it must
+	// not hide or move search fields belonging to the still-interactive main window.
+	for _, saved := range preserved {
+		pMoveWindow.Call(saved.hwnd, uintptr(saved.rect.Left), uintptr(saved.rect.Top), uintptr(saved.rect.Right-saved.rect.Left), uintptr(saved.rect.Bottom-saved.rect.Top), 1)
+		if saved.visible {
+			pShowWindow.Call(saved.hwnd, SW_SHOW)
+		} else {
+			pShowWindow.Call(saved.hwnd, SW_HIDE)
+		}
+	}
+	if restoreFocus && focused != 0 {
+		// Reparenting a native EDIT clears its caret. Restore both focus and the
+		// selection after the control returns to the detached editor so typing is
+		// continuous across repaints and live filtering.
+		pSetFocus.Call(focused)
+		pSendMessageW.Call(focused, EM_SETSEL, uintptr(loword(selection)), uintptr(hiword(selection)))
+	}
 	return legacy, legacyW
 }
 

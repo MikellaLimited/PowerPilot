@@ -313,7 +313,18 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 		finishGraphMiddleButton()
 		return 0
 	case WM_MOUSEWHEEL:
-		zoomScenarioGraph(int16((wParam >> 16) & 0xFFFF))
+		delta := int16((wParam >> 16) & 0xFFFF)
+		if app.graphEditorOpen && app.graphEditorSection != 0 {
+			// While a block editor is open, the wheel belongs to its active page
+			// (not to canvas zoom). This also covers the process picker and its list.
+			oldSection := app.section
+			app.section = app.graphEditorSection
+			queueSmoothScroll(delta)
+			app.section = oldSection
+			pInvalidateRect.Call(hwnd, 0, 0)
+		} else {
+			zoomScenarioGraph(delta)
+		}
 		return 0
 	case WM_KEYDOWN:
 		scenarioGraphDetachedInput = true
