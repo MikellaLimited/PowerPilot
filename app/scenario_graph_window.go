@@ -597,9 +597,10 @@ func paintScenarioGraphWindow(hwnd uintptr) {
 }
 
 func repaintVisibleScenarioGraphInputs() {
-	if app.graphCloseConfirm {
+	if app.graphCloseConfirm || !app.graphInputsNeedRepaint {
 		return
 	}
+	app.graphInputsNeedRepaint = false
 	handles := make([]uintptr, 0, len(graphEditorEdits)+2)
 	handles = append(handles, app.graphNameEdit, app.graphEditorText)
 	for _, edit := range graphEditorEdits {

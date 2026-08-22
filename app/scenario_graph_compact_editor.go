@@ -445,58 +445,64 @@ func prepareGraphFullEditorLayout(body RECT) (RECT, int) {
 	app.graphEditorRect = RECT{int32(x), int32(y), int32(x + panelW), int32(y + panelH)}
 	app.graphEditorLegacyBody = legacy
 	app.graphEditorDX, app.graphEditorDY = int32(x)-legacy.Left, int32(y)-legacy.Top
-	// A focused native EDIT must never be hidden during a paint/layout pass.
-	// Hiding it, even for one frame, makes Windows remove the real caret and
-	// keyboard focus. Selector changes happen after focus leaves the EDIT, so a
-	// normal visibility rebuild still occurs whenever the form actually changes.
-	focused, _, _ := pGetFocus.Call()
-	focusedEditor := false
+	previousVisibility := make(map[uintptr]bool, len(graphEditorEdits))
 	for _, edit := range graphEditorEdits {
-		if edit != 0 && edit == focused {
-			focusedEditor = true
-			break
+		if edit != 0 {
+			visible, _, _ := pIsWindowVisible.Call(edit)
+			previousVisibility[edit] = visible != 0
 		}
 	}
+	// Calculate the legacy form without physically moving its child HWNDs to the
+	// temporary legacy coordinates. They are moved once, directly to their final
+	// detached-window positions below. This removes the two moves per paint that
+	// made the text flash in sync with the caret.
 	oldSuppress := suppressEditVisibilityDuringLayout
-	if focusedEditor {
-		suppressEditVisibilityDuringLayout = true
-	}
+	oldDeferred := deferredEditMoves
+	suppressEditVisibilityDuringLayout = true
+	deferredEditMoves = make(map[uintptr]RECT)
 	oldSection := app.section
 	app.section = app.graphEditorSection
 	layoutControlsLogical(RECT{0, 0, int32(legacyW), int32(legacyH)})
 	app.section = oldSection
-	positionGraphFullEditorInputs()
+	desired := deferredEditMoves
+	deferredEditMoves = oldDeferred
 	suppressEditVisibilityDuringLayout = oldSuppress
+	positionGraphFullEditorInputs(desired, previousVisibility)
 	return legacy, legacyW
 }
 
-func positionGraphFullEditorInputs() {
+func positionGraphFullEditorInputs(desired map[uintptr]RECT, previousVisibility map[uintptr]bool) {
 	for _, id := range graphFullEditorInputIDs(app.graphEditorSection) {
 		h := app.edits[id]
 		if h == 0 {
 			continue
 		}
-		visible, _, _ := pIsWindowVisible.Call(h)
+		base, shouldShow := desired[h]
 		if app.graphEditorSection == 8 && app.conditionCatalogAnimating {
-			visible = 0
+			shouldShow = false
 		}
-		var wr RECT
-		pGetWindowRect.Call(h, uintptr(unsafe.Pointer(&wr)))
-		pt := POINT{X: wr.Left, Y: wr.Top}
-		pScreenToClient.Call(app.graphWindow, uintptr(unsafe.Pointer(&pt)))
-		dx, dy := scaledInt040(int(app.graphEditorDX)), scaledInt040(int(app.graphEditorDY))
-		currentH := int(wr.Bottom - wr.Top)
-		fieldH := currentH
-		fieldY := int(pt.Y) + dy
-		repaint := uintptr(1)
-		if suppressEditVisibilityDuringLayout {
-			repaint = 0
+		if shouldShow {
+			dx, dy := int32(scaledInt040(int(app.graphEditorDX))), int32(scaledInt040(int(app.graphEditorDY)))
+			want := RECT{base.Left + dx, base.Top + dy, base.Right + dx, base.Bottom + dy}
+			var current RECT
+			pGetWindowRect.Call(h, uintptr(unsafe.Pointer(&current)))
+			pt := POINT{X: current.Left, Y: current.Top}
+			pScreenToClient.Call(app.graphWindow, uintptr(unsafe.Pointer(&pt)))
+			currentW, currentH := current.Right-current.Left, current.Bottom-current.Top
+			if pt.X != want.Left || pt.Y != want.Top || currentW != want.Right-want.Left || currentH != want.Bottom-want.Top {
+				pMoveWindow.Call(h, uintptr(want.Left), uintptr(want.Top), uintptr(want.Right-want.Left), uintptr(want.Bottom-want.Top), 0)
+				app.graphInputsNeedRepaint = true
+			}
 		}
-		pMoveWindow.Call(h, uintptr(int(pt.X)+dx), uintptr(fieldY), uintptr(wr.Right-wr.Left), uintptr(fieldH), repaint)
-		if visible != 0 {
-			pShowWindow.Call(h, SW_SHOW)
+		if shouldShow {
+			if !previousVisibility[h] {
+				pShowWindow.Call(h, SW_SHOW)
+				app.graphInputsNeedRepaint = true
+			}
 		} else {
-			pShowWindow.Call(h, SW_HIDE)
+			if previousVisibility[h] {
+				pShowWindow.Call(h, SW_HIDE)
+			}
 		}
 	}
 }

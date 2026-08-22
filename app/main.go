@@ -1024,6 +1024,7 @@ type App struct {
 	graphLastMouseY                        int32
 	graphValidation                        []GraphValidationIssue
 	graphWindow                            uintptr
+	graphInputsNeedRepaint                 bool
 	graphDetachRect                        RECT
 	graphSaveRect                          RECT
 	graphNameRect                          RECT
@@ -1105,6 +1106,7 @@ var fontCache = map[int]uintptr{}
 var controlBrush uintptr
 var editAnimOffsetX, editAnimOffsetY int
 var suppressEditVisibilityDuringLayout bool
+var deferredEditMoves map[uintptr]RECT
 var drawingInteractiveSurface bool
 var drawingTaskNavigationMenu bool
 var drawingNotificationPanel bool
@@ -6524,7 +6526,9 @@ func animateConditionCatalog() bool {
 			positionConditionEditorInputs(true)
 		}
 		if app.graphWindow != 0 && app.graphEditorSection == 8 {
-			positionGraphFullEditorInputs()
+			// The next detached-window paint recalculates and applies final child
+			// positions in one pass; never move them through the legacy coordinates.
+			app.graphInputsNeedRepaint = true
 		}
 	}
 	return true
@@ -11231,6 +11235,10 @@ func move(h uintptr, x, y, w, hgt int) {
 		py := int(float64(y+editAnimOffsetY)*sc + .5)
 		pw := max(1, int(float64(w)*sc+.5))
 		ph := max(1, int(float64(hgt)*sc+.5))
+		if deferredEditMoves != nil {
+			deferredEditMoves[h] = RECT{int32(px), int32(py), int32(px + pw), int32(py + ph)}
+			return
+		}
 		repaint := uintptr(1)
 		if suppressEditVisibilityDuringLayout {
 			repaint = 0
