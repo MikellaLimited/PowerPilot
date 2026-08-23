@@ -1051,6 +1051,7 @@ type App struct {
 	graphSettingsErrorRect                 RECT
 	graphSettingsHoverAnim                 float64
 	graphSettingsPanelAnim                 float64
+	graphSettingsPanelClosing              bool
 	graphSettingsOpen                      bool
 	graphNameRect                          RECT
 	graphNameEdit                          uintptr
@@ -1926,7 +1927,7 @@ func layoutControlsLogical(rc RECT) {
 			y := tabY + i*(42+tabGap)
 			app.settingsTabs[i] = RECT{int32(innerLeft), int32(y), int32(innerLeft + tabW), int32(y + 42)}
 		}
-		app.settingsCompactTabsRect = RECT{int32(pad + 218), int32(bodyTop + 14), int32(pad + 264), int32(bodyTop + 48)}
+		app.settingsCompactTabsRect = RECT{int32(pad + 142), int32(bodyTop + 14), int32(pad + 184), int32(bodyTop + 48)}
 		innerLeft += tabW + 14
 		innerContentW = innerRight - innerLeft
 		app.settingsContentLeft = innerLeft
@@ -1987,7 +1988,8 @@ func layoutControlsLogical(rc RECT) {
 				app.settingsResourceRefreshRects[i] = RECT{}
 			}
 			app.hideZeroResourceProcessesRect = RECT{int32(innerLeft), int32(row9), int32(innerLeft + 28), int32(row9 + 28)}
-			app.wakeLeadFieldRect = RECT{int32(settingsRight - 104), int32(row7 - 2), int32(settingsRight - 42), int32(row7 + 32)}
+			wakeFieldX := minInt(settingsRight-94, innerLeft+318)
+			app.wakeLeadFieldRect = RECT{int32(wakeFieldX), int32(row7), int32(wakeFieldX + 54), int32(row7 + 30)}
 			uiPlaceInlineNumberEdit(idWakeLead, app.wakeLeadFieldRect)
 		case 1:
 			rowY := contentY + 26
@@ -2123,7 +2125,7 @@ func layoutControlsLogical(rc RECT) {
 				app.temperatureAutoUpdateRect = RECT{int32(innerLeft), int32(autoY), int32(settingsRight), int32(autoY + 48)}
 			} else {
 				bw := (settingsContentW - 12) / 2
-				bh := 68
+				bh := 84
 				for i := 0; i < 5; i++ {
 					row, col := i/2, i%2
 					x := innerLeft + col*(bw+12)
@@ -2145,12 +2147,12 @@ func layoutControlsLogical(rc RECT) {
 			app.showSystemProcessesRect = RECT{int32(innerLeft), int32(row2), int32(innerLeft + 28), int32(row2 + 28)}
 			app.safetyProcessesRect = RECT{int32(innerLeft), int32(row3), int32(minInt(settingsRight, innerLeft+280)), int32(row3 + 42)}
 		case 6:
-			app.soundsRect = RECT{int32(innerLeft), int32(contentY + 10), int32(innerLeft + 28), int32(contentY + 38)}
+			app.soundsRect = RECT{int32(innerLeft), int32(contentY + 104), int32(innerLeft + 28), int32(contentY + 132)}
 			trackLeft := innerLeft + 4
 			valueW := 66
-			app.volumeValueRect = RECT{int32(settingsRight - valueW), int32(contentY + 112), int32(settingsRight), int32(contentY + 140)}
+			app.volumeValueRect = RECT{int32(settingsRight - valueW), int32(contentY + 40), int32(settingsRight), int32(contentY + 68)}
 			trackRight := int(app.volumeValueRect.Left) - 18
-			trackY := contentY + 122
+			trackY := contentY + 50
 			app.volumeTrackRect = RECT{int32(trackLeft), int32(trackY), int32(trackRight), int32(trackY + 8)}
 			knobX := trackLeft + (trackRight-trackLeft)*app.settings.SoundVolume/100
 			app.volumeKnobRect = RECT{int32(knobX - 8), int32(trackY - 5), int32(knobX + 8), int32(trackY + 13)}
@@ -2968,7 +2970,7 @@ func settingsVirtualContentHeight() int {
 		if app.settingsCategory == 4 {
 			return 430
 		}
-		return 275
+		return 340
 	case 5:
 		return 320
 	case 6:
@@ -3892,7 +3894,7 @@ func drawSettingsPage(hdc uintptr, body RECT, w int) {
 		}
 		fontSize := 9
 		if app.settings.SettingsCompactTabs {
-			fontSize = 15
+			fontSize = 18
 		}
 		flags := uint32(DT_CENTER | DT_VCENTER | DT_SINGLELINE)
 		if !app.settings.SettingsCompactTabs {
@@ -4021,10 +4023,7 @@ func drawGeneralSettings(hdc uintptr, body RECT) {
 func drawSoundSettings(hdc uintptr, body RECT) {
 	baseY := app.settingsContentTop + 6
 	left := app.settingsContentLeft
-	drawToggle(hdc, app.soundsRect, app.settings.Sounds)
-	drawText(hdc, "Звуки интерфейса", int(app.soundsRect.Right)+12, int(app.soundsRect.Top)-2, int(body.Right-app.soundsRect.Right)-30, 20, 13, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc, "Короткие звуки выбора, переходов и выполнения.", int(app.soundsRect.Right)+12, int(app.soundsRect.Top)+17, int(body.Right-app.soundsRect.Right)-30, 16, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	drawText(hdc, "Громкость интерфейса", left, baseY+78, 260, 20, 13, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Громкость интерфейса", left, baseY, 260, 20, 13, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	if app.volumeTrackRect.Right > app.volumeTrackRect.Left {
 		roundFill(hdc, app.volumeTrackRect, surfaceButtonColor(), 4)
 		filled := app.volumeTrackRect
@@ -4039,6 +4038,9 @@ func drawSoundSettings(hdc uintptr, body RECT) {
 		roundFill(hdc, app.volumeValueRect, surfaceButtonColor(), 8)
 		drawText(hdc, "%", int(app.volumeValueRect.Right)-22, int(app.volumeValueRect.Top), 18, int(app.volumeValueRect.Bottom-app.volumeValueRect.Top), 11, 600, theme.accent2, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
+	drawToggle(hdc, app.soundsRect, app.settings.Sounds)
+	drawText(hdc, "Звуки интерфейса", int(app.soundsRect.Right)+12, int(app.soundsRect.Top)-2, int(body.Right-app.soundsRect.Right)-30, 20, 13, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Короткие звуки выбора, переходов и выполнения.", int(app.soundsRect.Right)+12, int(app.soundsRect.Top)+17, int(body.Right-app.soundsRect.Right)-30, 16, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 }
 
 func drawInterfaceSettings040(hdc uintptr, body RECT) {
@@ -4178,7 +4180,7 @@ func drawAppearanceSettings(hdc uintptr, body RECT) {
 		if hv > 0 && app.settings.SurfaceStyle != i && ui2d.active {
 			d2dDrawRoundedOutline(rv, 10, float32(1+0.4*hv), blendColor(theme.border, theme.accent2, .42))
 		}
-		drawText(hdc, sn[i], int(r.Left)+6, int(r.Top)+3, int(r.Right-r.Left)-12, int(r.Bottom-r.Top)-6, 10, 650, theme.text, DT_CENTER|DT_VCENTER|DT_WORDBREAK)
+		drawText(hdc, sn[i], int(r.Left)+10, int(r.Top)+7, int(r.Right-r.Left)-20, int(r.Bottom-r.Top)-12, 10, 650, theme.text, DT_CENTER|DT_WORDBREAK)
 	}
 	animTitleY := int(maxRectBottom(app.surfaceRects[:])) + 8
 	drawText(hdc, "Анимации", left, animTitleY, 130, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
@@ -4359,8 +4361,8 @@ func drawSettingsActionCard(hdc uintptr, r RECT, title, sub string) {
 	if hv > 0 && ui2d.active {
 		d2dDrawRoundedOutline(rv, 12, float32(1+0.4*hv), blendColor(theme.border, theme.accent2, .42))
 	}
-	drawText(hdc, title, int(r.Left)+14, int(r.Top)+8, int(r.Right-r.Left)-28, 19, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	drawText(hdc, sub, int(r.Left)+14, int(r.Top)+28, int(r.Right-r.Left)-28, int(r.Bottom-r.Top)-34, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK|DT_END_ELLIPSIS)
+	drawText(hdc, title, int(r.Left)+16, int(r.Top)+9, int(r.Right-r.Left)-32, 34, 11, 650, theme.text, DT_LEFT|DT_WORDBREAK)
+	drawText(hdc, sub, int(r.Left)+16, int(r.Top)+45, int(r.Right-r.Left)-32, int(r.Bottom-r.Top)-53, 9, 400, theme.muted, DT_LEFT|DT_WORDBREAK|DT_END_ELLIPSIS)
 }
 
 func drawSettingsUpdateCard(hdc uintptr, r, action RECT, title, sub, actionLabel string, busy bool) {
@@ -5543,7 +5545,7 @@ func drawHistorySettings(hdc uintptr, body RECT) {
 	roundFill(hdc, app.historySearchRect, surfaceButtonColor(), 9)
 	items := filteredHistoryItems()
 	if len(items) == 0 {
-		drawText(hdc, "По этому фильтру записей пока нет.", int(body.Left)+18, int(app.historyFilterRects[0].Bottom)+34, int(body.Right-body.Left)-36, 30, 12, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "По этому фильтру записей пока нет.", app.settingsContentLeft, int(app.historyFilterRects[0].Bottom)+34, int(body.Right)-app.settingsContentLeft-18, 30, 12, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		drawOutlinedButton(hdc, app.historyClearRect, "Очистить", theme.danger)
 		return
 	}

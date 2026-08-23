@@ -3,9 +3,25 @@
 package main
 
 import (
+	"math"
 	"reflect"
 	"testing"
 )
+
+func TestScenarioGraphAlignedNodesHaveStraightConnection(t *testing.T) {
+	oldCanvas := app.graphCanvasRect
+	app.graphCanvasRect = RECT{Left: 10, Top: 20, Right: 1200, Bottom: 800}
+	t.Cleanup(func() { app.graphCanvasRect = oldCanvas })
+
+	g := ScenarioGraph{Zoom: 1}
+	condition := newScenarioGraphNode(graphNodeCondition, 48, 96)
+	action := newScenarioGraphNode(graphNodeAction, 336, 96)
+	_, outputY := graphOutputPoint(&g, condition, graphPortNext)
+	_, inputY := graphInputPoint(&g, action)
+	if math.Abs(float64(outputY-inputY)) > .01 {
+		t.Fatalf("aligned nodes produced a bent connection: output=%v input=%v", outputY, inputY)
+	}
+}
 
 func TestScenarioGraphMigratesLegacyTask(t *testing.T) {
 	legacy := TaskState{

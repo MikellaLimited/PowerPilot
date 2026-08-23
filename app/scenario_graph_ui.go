@@ -253,13 +253,16 @@ func graphOutputPoint(g *ScenarioGraph, n ScenarioGraphNode, port string) (float
 			idx = i
 		}
 	}
-	y := float32(r.Top) + float32(46+idx*22)*float32(g.Zoom)
+	y := float32(r.Top) + float32(48+idx*24)*float32(g.Zoom)
 	return float32(r.Right), y
 }
 
 func graphInputPoint(g *ScenarioGraph, n ScenarioGraphNode) (float32, float32) {
 	r := graphNodeScreenRect(g, n)
-	return float32(r.Left), float32((r.Top + r.Bottom) / 2)
+	if n.Kind == graphNodeJunction || n.Kind == graphNodeLogic {
+		return float32(r.Left), float32((r.Top + r.Bottom) / 2)
+	}
+	return float32(r.Left), float32(r.Top) + 48*float32(g.Zoom)
 }
 
 func drawGraphConnection(x1, y1, x2, y2, stroke float32, color uint32) {
@@ -463,8 +466,34 @@ func advanceGraphSettingsGearHover() bool {
 		}
 	}
 	changed := math.Abs(old-app.graphSettingsHoverAnim) > .001
-	if app.graphSettingsOpen && app.graphSettingsPanelAnim < 1 {
+	// Detached graph windows have their own timer, so advance the same generic
+	// pop-up animation used by the main window here as well.
+	hoverTarget := 0.0
+	if app.hoverKey != 0 && pointIn(app.hoverRect, app.mouseX, app.mouseY) {
+		hoverTarget = 1
+	}
+	hoverStep := .34
+	if app.settings.AnimationMode == 1 {
+		hoverStep = .46
+	}
+	if app.settings.AnimationMode == 2 {
+		hoverStep = 1
+	}
+	oldGeneric := app.hoverAnim
+	app.hoverAnim += (hoverTarget - app.hoverAnim) * hoverStep
+	if math.Abs(app.hoverAnim-hoverTarget) < .01 {
+		app.hoverAnim = hoverTarget
+	}
+	if hoverTarget == 0 && app.hoverAnim == 0 {
+		app.hoverKey, app.hoverRect = 0, (RECT{})
+	}
+	changed = changed || oldGeneric != app.hoverAnim
+	if app.graphSettingsOpen {
 		oldPanel := app.graphSettingsPanelAnim
+		target := 1.0
+		if app.graphSettingsPanelClosing {
+			target = 0
+		}
 		step := .18
 		if app.settings.AnimationMode == 1 {
 			step = .3
@@ -472,9 +501,13 @@ func advanceGraphSettingsGearHover() bool {
 		if app.settings.AnimationMode == 2 {
 			step = 1
 		}
-		app.graphSettingsPanelAnim += (1 - app.graphSettingsPanelAnim) * step
-		if 1-app.graphSettingsPanelAnim < .01 {
-			app.graphSettingsPanelAnim = 1
+		app.graphSettingsPanelAnim += (target - app.graphSettingsPanelAnim) * step
+		if math.Abs(target-app.graphSettingsPanelAnim) < .01 {
+			app.graphSettingsPanelAnim = target
+			if target == 0 {
+				app.graphSettingsOpen = false
+				app.graphSettingsPanelClosing = false
+			}
 		}
 		changed = changed || oldPanel != app.graphSettingsPanelAnim
 	}
@@ -809,7 +842,7 @@ func handleScenarioGraphClick(x, y int32) bool {
 			return true
 		}
 		if !pointIn(app.graphSettingsPanelRect, x, y) {
-			app.graphSettingsOpen = false
+			app.graphSettingsPanelClosing = true
 			playUI(clickSound)
 			invalidateScenarioGraphWindows()
 		}
@@ -818,6 +851,7 @@ func handleScenarioGraphClick(x, y int32) bool {
 	if currentScenarioGraphSession() != nil && pointIn(app.graphSettingsRect, x, y) {
 		app.graphSettingsOpen = true
 		app.graphSettingsPanelAnim = 0
+		app.graphSettingsPanelClosing = false
 		playUI(openSound)
 		invalidateScenarioGraphWindows()
 		return true
