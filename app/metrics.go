@@ -3,6 +3,8 @@
 package main
 
 import (
+	"math"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -119,6 +121,7 @@ func startMetricSampler() {
 	metricState.snap.GPU = -1
 	metricState.snap.DiskPercent = -1
 	metricState.snap.VRAMUsedMB = -1
+	metricState.snap.BatteryPercent = -1
 	metricState.interval = time.Duration(clampInt(app.settings.ResourceRefreshMS, 250, 5000)) * time.Millisecond
 	metricState.Unlock()
 	initResourceStats()
@@ -209,6 +212,7 @@ func sampleMetrics() {
 	snap := MetricSnapshot{CPU: cpu, GPU: gpu, RAMPercent: ramPct, RAMUsedGB: ramUsed, RAMTotalGB: ramTotal,
 		NetworkKBps: (down + up) / 1024.0, NetworkDownKBps: down / 1024.0, NetworkUpKBps: up / 1024.0,
 		DiskPercent: disk, DiskFreeGB: diskFree, DiskTotalGB: diskTotal, Disks: disks, VRAMUsedMB: vram, BatteryPercent: batt, OnAC: onAC, Updated: now}
+	normalizeMetricSnapshot(&snap)
 	metricState.Lock()
 	metricState.snap = snap
 	metricState.history = append(metricState.history, cloneMetricSnapshot(snap))
@@ -243,6 +247,40 @@ func processMetricSnapshot() []ProcessMetric {
 }
 
 func filetime64(f FILETIME) uint64 { return uint64(f.HighDateTime)<<32 | uint64(f.LowDateTime) }
+
+func normalizePercentageMetric(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return -1
+	}
+	if v < 0 {
+		return -1
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
+}
+
+func normalizeRateMetric(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return 0
+	}
+	return v
+}
+
+func normalizeMetricSnapshot(s *MetricSnapshot) {
+	s.CPU = normalizePercentageMetric(s.CPU)
+	s.GPU = normalizePercentageMetric(s.GPU)
+	s.RAMPercent = normalizePercentageMetric(s.RAMPercent)
+	s.DiskPercent = normalizePercentageMetric(s.DiskPercent)
+	s.BatteryPercent = normalizePercentageMetric(s.BatteryPercent)
+	s.NetworkDownKBps = normalizeRateMetric(s.NetworkDownKBps)
+	s.NetworkUpKBps = normalizeRateMetric(s.NetworkUpKBps)
+	s.NetworkKBps = s.NetworkDownKBps + s.NetworkUpKBps
+	for i := range s.Disks {
+		s.Disks[i].Activity = normalizePercentageMetric(s.Disks[i].Activity)
+	}
+}
 
 func sampleCPU() float64 {
 	var idle, kernel, user FILETIME
@@ -300,8 +338,7 @@ func sampleNetwork() (float64, float64) {
 			break
 		}
 		row := (*mibIfRow)(unsafe.Pointer(&buf[off]))
-		// Loopback is not useful for download-completion conditions.
-		if row.Type == 24 {
+		if !usableNetworkInterface(row) {
 			continue
 		}
 		curIn, curOut := row.InOctets, row.OutOctets
@@ -324,6 +361,28 @@ func sampleNetwork() (float64, float64) {
 		return 0, 0
 	}
 	return float64(inDiff) / seconds, float64(outDiff) / seconds
+}
+
+func usableNetworkInterface(row *mibIfRow) bool {
+	if row == nil || row.AdminStatus != 1 || row.OperStatus != 5 {
+		return false
+	}
+	// Software loopback and tunnel adapters either duplicate physical traffic
+	// or report traffic that never reaches the network card.
+	if row.Type == 24 || row.Type == 131 {
+		return false
+	}
+	n := int(row.DescrLen)
+	if n > len(row.Descr) {
+		n = len(row.Descr)
+	}
+	description := strings.ToLower(string(row.Descr[:n]))
+	for _, marker := range []string{"virtual", "hyper-v", "vmware", "loopback", "tunnel", "teredo", "isatap", "wintun", "wireguard", "tap-windows"} {
+		if strings.Contains(description, marker) {
+			return false
+		}
+	}
+	return true
 }
 
 func initDiskCounter() {

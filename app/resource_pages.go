@@ -897,8 +897,12 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 			y += 24
 			listTop := y
 			y = prepareResourceStatsList(body, y, len(apps), 39)
+			listBottom := int(body.Bottom) - 10
+			if ui2d.active {
+				d2dPushClip(RECT{int32(left), int32(listTop), int32(right - 10), int32(listBottom)})
+			}
 			for _, a := range apps {
-				if y >= listTop && y+36 <= int(body.Bottom)-10 {
+				if y+34 > listTop && y < listBottom {
 					r := RECT{int32(left), int32(y), int32(right - 10), int32(y + 34)}
 					roundFill(hdc, r, surfaceButtonColor(), 8)
 					disk := a.ReadKBps + a.WriteKBps
@@ -913,6 +917,9 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 					}
 				}
 				y += 39
+			}
+			if ui2d.active {
+				d2dPopClip()
 			}
 			drawScrollBar(hdc, app.resourceStatsListScrollTrack, app.resourceStatsListScrollThumb)
 			return
@@ -929,14 +936,21 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 			y += 24
 			listTop := y
 			y = prepareResourceStatsList(body, y, len(apps), 39)
+			listBottom := int(body.Bottom) - 10
+			if ui2d.active {
+				d2dPushClip(RECT{int32(left), int32(listTop), int32(right - 10), int32(listBottom)})
+			}
 			for _, a := range apps {
-				if y >= listTop && y+38 <= int(body.Bottom)-10 {
+				if y+34 > listTop && y < listBottom {
 					r := RECT{int32(left), int32(y), int32(right - 10), int32(y + 34)}
 					roundFill(hdc, r, surfaceButtonColor(), 8)
 					drawText(hdc, a.Name, left+10, y, nameW-16, 34, 9, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 					drawText(hdc, formatTrafficKB(a.TrafficKB), left+nameW+8, y, right-left-nameW-28, 34, 9, 550, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 				}
 				y += 39
+			}
+			if ui2d.active {
+				d2dPopClip()
 			}
 			drawScrollBar(hdc, app.resourceStatsListScrollTrack, app.resourceStatsListScrollThumb)
 			return
@@ -952,14 +966,21 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 		y += 24
 		listTop := y
 		y = prepareResourceStatsList(body, y, len(apps), 39)
+		listBottom := int(body.Bottom) - 10
+		if ui2d.active {
+			d2dPushClip(RECT{int32(left), int32(listTop), int32(right - 10), int32(listBottom)})
+		}
 		for _, a := range apps {
-			if y >= listTop && y+38 <= int(body.Bottom)-10 {
+			if y+34 > listTop && y < listBottom {
 				r := RECT{int32(left), int32(y), int32(right - 10), int32(y + 34)}
 				roundFill(hdc, r, surfaceButtonColor(), 8)
 				drawText(hdc, a.Name, left+10, y, nameW-16, 34, 9, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 				drawText(hdc, formatActivitySeconds(a.ActiveSeconds), left+nameW+8, y, right-left-nameW-28, 34, 9, 550, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 			}
 			y += 39
+		}
+		if ui2d.active {
+			d2dPopClip()
 		}
 		drawScrollBar(hdc, app.resourceStatsListScrollTrack, app.resourceStatsListScrollThumb)
 		return

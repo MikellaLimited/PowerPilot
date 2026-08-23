@@ -1993,7 +1993,8 @@ func layoutControlsLogical(rc RECT) {
 			}
 			app.hideZeroResourceProcessesRect = RECT{int32(innerLeft), int32(row9), int32(innerLeft + 28), int32(row9 + 28)}
 			wakeLineX := innerLeft + 40
-			_, app.wakeLeadFieldRect, _ = uiInlineNumberLayout("Пробуждать ПК по расписанию за", "мин", wakeLineX, row7, settingsRight, 2)
+			wakeFieldX := wakeLineX + uiTextWidth("Пробуждать ПК по расписанию за", uiMetricsDefault.InlineFontSize, uiMetricsDefault.InlineFontWeight) + 8
+			app.wakeLeadFieldRect = uiCompactFieldRect(wakeFieldX, row7, 40)
 			uiPlaceInlineNumberEdit(idWakeLead, app.wakeLeadFieldRect)
 		case 1:
 			rowY := contentY + 26
@@ -4012,7 +4013,7 @@ func drawGeneralSettings(hdc uintptr, body RECT) {
 	drawText(hdc, "Текущие ширина и высота сохраняются и блокируют resize.", int(app.lockCurrentRect.Right)+12, int(app.lockCurrentRect.Top)+16, int(body.Right-app.lockCurrentRect.Right)-28, 16, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	drawToggle(hdc, app.wakeScheduledRect, app.settings.WakeScheduledTasks)
 	lineX := int(app.wakeScheduledRect.Right) + 12
-	drawText(hdc, "Пробуждать ПК по расписанию за", lineX, int(app.wakeScheduledRect.Top)-2, max(80, int(app.wakeLeadFieldRect.Left)-lineX-10), 20, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	drawText(hdc, "Пробуждать ПК по расписанию за", lineX, int(app.wakeScheduledRect.Top)-2, max(80, int(app.wakeLeadFieldRect.Left)-lineX-6), 20, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	roundFill(hdc, app.wakeLeadFieldRect, surfaceButtonColor(), 8)
 	drawText(hdc, "мин", int(app.wakeLeadFieldRect.Right)+5, int(app.wakeLeadFieldRect.Top), 34, int(app.wakeLeadFieldRect.Bottom-app.wakeLeadFieldRect.Top), 10, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	drawText(hdc, "Wake timer Windows", lineX, int(app.wakeScheduledRect.Top)+24, int(body.Right)-lineX-24, 15, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
@@ -4164,9 +4165,10 @@ func drawAppearanceSettings(hdc uintptr, body RECT) {
 		if hv > 0 && app.settings.Background != i && ui2d.active {
 			d2dDrawRoundedOutline(rv, 11, float32(1+0.4*hv), blendColor(theme.border, theme.accent2, .42))
 		}
-		drawText(hdc, bgNames[i], int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 11, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 		preview := RECT{r.Left + 8, r.Top + 7, r.Left + 38, r.Bottom - 7}
 		drawBackgroundSample(hdc, preview, i)
+		textLeft := int(preview.Right) + 7
+		drawText(hdc, bgNames[i], textLeft, int(r.Top), int(r.Right)-textLeft-7, int(r.Bottom-r.Top), 10, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	}
 	surfaceTitleY := int(maxRectBottom(app.backgroundRects[:])) + 8
 	drawText(hdc, "Области и панели", left, surfaceTitleY, 180, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
@@ -4184,7 +4186,13 @@ func drawAppearanceSettings(hdc uintptr, body RECT) {
 		if hv > 0 && app.settings.SurfaceStyle != i && ui2d.active {
 			d2dDrawRoundedOutline(rv, 10, float32(1+0.4*hv), blendColor(theme.border, theme.accent2, .42))
 		}
-		drawText(hdc, sn[i], int(r.Left)+10, int(r.Top)+7, int(r.Right-r.Left)-20, int(r.Bottom-r.Top)-12, 10, 650, theme.text, DT_CENTER|DT_WORDBREAK)
+		textW := int(r.Right-r.Left) - 20
+		textH := 16
+		if uiTextWidth(sn[i], 10, 650) > textW {
+			textH = 28
+		}
+		textY := int(r.Top) + (int(r.Bottom-r.Top)-textH)/2
+		drawText(hdc, sn[i], int(r.Left)+10, textY, textW, textH, 10, 650, theme.text, DT_CENTER|DT_WORDBREAK)
 	}
 	animTitleY := int(maxRectBottom(app.surfaceRects[:])) + 8
 	drawText(hdc, "Анимации", left, animTitleY, 130, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
@@ -4293,8 +4301,9 @@ func drawStatisticsSettings(hdc uintptr, body RECT) {
 		}
 	}
 	baseY := app.settingsContentTop + 8
-	innerLeft := int(body.Left) + 18
-	innerW := int(body.Right-body.Left) - 36
+	innerLeft := app.settingsContentLeft
+	innerRight := int(body.Right) - 18
+	innerW := innerRight - innerLeft
 	gap := 12
 	cardW := (innerW - gap*2) / 3
 	vals := []struct {
@@ -4324,14 +4333,14 @@ func drawStatisticsSettings(hdc uintptr, body RECT) {
 	for i, n := range names {
 		y := chartY + 30 + i*30
 		drawText(hdc, n, innerLeft, y, 120, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-		track := RECT{int32(innerLeft + 128), int32(y + 5), int32(int(body.Right) - 90), int32(y + 13)}
+		track := RECT{int32(innerLeft + 128), int32(y + 5), int32(innerRight - 54), int32(y + 13)}
 		roundFill(hdc, track, surfaceButtonColor(), 4)
 		if actions[i] > 0 {
 			fillR := track
 			fillR.Right = track.Left + int32(float64(track.Right-track.Left)*float64(actions[i])/float64(maxV))
 			roundFill(hdc, fillR, theme.accent, 4)
 		}
-		drawText(hdc, fmt.Sprint(actions[i]), int(body.Right)-78, y, 50, 18, 11, 650, theme.text, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, fmt.Sprint(actions[i]), innerRight-44, y, 44, 18, 11, 650, theme.text, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 	}
 }
 
