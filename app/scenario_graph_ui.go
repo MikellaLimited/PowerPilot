@@ -300,7 +300,7 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	roundFill(hdc, app.graphNameRect, surfaceButtonColor(), 9)
 	if app.graphNameEdit != 0 {
 		move(app.graphNameEdit, int(app.graphNameRect.Left)+8, int(app.graphNameRect.Top)+6, max(20, int(app.graphNameRect.Right-app.graphNameRect.Left)-16), 22)
-		if app.graphEditorOpen || app.graphCloseConfirm || app.graphSettingsOpen {
+		if app.graphEditorOpen || app.graphCloseConfirm {
 			pShowWindow.Call(app.graphNameEdit, SW_HIDE)
 		} else {
 			pShowWindow.Call(app.graphNameEdit, SW_SHOW)
@@ -312,13 +312,13 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	if !detached {
 		gearHover = hoverAmount(app.graphSettingsRect)
 	}
-	gearRect := expandRect(app.graphSettingsRect, int32(2*gearHover+.5))
+	gearRect := app.graphSettingsRect
 	roundFill(hdc, gearRect, surfaceButtonColor(), 10)
 	if gearHover > 0 && ui2d.active {
 		d2dDrawRoundedOutline(gearRect, 10, 1.2, blendColor(theme.border, theme.accent2, .55))
 	}
 	iconInset := int32(8)
-	d2dDrawSettingsIconRotated(RECT{gearRect.Left + iconInset, gearRect.Top + 3, gearRect.Right - iconInset, gearRect.Bottom - 3}, 150*gearHover)
+	d2dDrawSettingsIconRotated(RECT{gearRect.Left + iconInset, gearRect.Top + 3, gearRect.Right - iconInset, gearRect.Bottom - 3}, 90*gearHover)
 	if !detached {
 		drawButton(hdc, app.graphDetachRect, "Открыть отдельно", false)
 	}
@@ -330,16 +330,22 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	roundFill(hdc, canvas, blendColor(theme.bg, surfacePanelColor(), .36), 14)
 	if ui2d.active {
 		d2dPushClip(canvas)
-		grid := blendColor(theme.border, theme.muted, .14)
-		step := int32(max(28, int(48*g.Zoom)))
-		ox := canvas.Left + int32(math.Mod(g.ViewX*g.Zoom, float64(step)))
-		oy := canvas.Top + int32(math.Mod(g.ViewY*g.Zoom, float64(step)))
-		for x := ox; x < canvas.Right; x += step {
-			d2dDrawLine(float32(x), float32(canvas.Top), float32(x), float32(canvas.Bottom), .55, grid)
+		minorStep := int32(max(10, int(24*g.Zoom)))
+		majorStep := minorStep * 4
+		minor := blendColor(theme.border, theme.muted, .20)
+		major := blendColor(theme.border, theme.accent2, .28)
+		drawGrid := func(step int32, color uint32, stroke float32) {
+			ox := canvas.Left + int32(math.Mod(g.ViewX*g.Zoom, float64(step)))
+			oy := canvas.Top + int32(math.Mod(g.ViewY*g.Zoom, float64(step)))
+			for x := ox; x < canvas.Right; x += step {
+				d2dDrawLine(float32(x), float32(canvas.Top), float32(x), float32(canvas.Bottom), stroke, color)
+			}
+			for y := oy; y < canvas.Bottom; y += step {
+				d2dDrawLine(float32(canvas.Left), float32(y), float32(canvas.Right), float32(y), stroke, color)
+			}
 		}
-		for y := oy; y < canvas.Bottom; y += step {
-			d2dDrawLine(float32(canvas.Left), float32(y), float32(canvas.Right), float32(y), .55, grid)
-		}
+		drawGrid(minorStep, minor, .45)
+		drawGrid(majorStep, major, .8)
 		if app.graphMarquee {
 			marquee := graphRectNormalized(app.graphMarqueeStartX, app.graphMarqueeStartY, app.graphMarqueeX, app.graphMarqueeY)
 			d2dFillRoundedOpacity(marquee, theme.accent2, 3, .16)
@@ -418,9 +424,14 @@ func drawScenarioGraphSettingsPanel(hdc uintptr, body RECT) {
 		return
 	}
 	w, h := minInt(430, int(body.Right-body.Left)-32), 272
-	x, y := int(app.graphSettingsRect.Right)-w, int(app.graphSettingsRect.Bottom)+8
-	app.graphSettingsPanelRect = RECT{int32(x), int32(y), int32(x + w), int32(y + h)}
+	a := clampFloat(app.graphSettingsPanelAnim, 0, 1)
+	x, y := int(app.graphSettingsRect.Right)-w, int(app.graphSettingsRect.Bottom)+8-int((1-a)*8)
+	visibleH := max(2, int(float64(h)*a))
+	app.graphSettingsPanelRect = RECT{int32(x), int32(y), int32(x + w), int32(y + visibleH)}
 	roundFill(hdc, app.graphSettingsPanelRect, surfacePanelColor(), 16)
+	if ui2d.active {
+		d2dPushClip(app.graphSettingsPanelRect)
+	}
 	drawText(hdc, "Настройки редактора", x+22, y+18, w-44, 28, 18, 700, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	app.graphSettingsToggleRect = RECT{int32(x + 22), int32(y + 70), int32(x + 50), int32(y + 98)}
 	drawToggle(hdc, app.graphSettingsToggleRect, app.settings.GraphAutoRemoveSingleJunction)
@@ -432,6 +443,9 @@ func drawScenarioGraphSettingsPanel(hdc uintptr, body RECT) {
 	app.graphSettingsErrorRect = RECT{int32(x + 22), int32(y + 202), int32(x + 50), int32(y + 230)}
 	drawToggle(hdc, app.graphSettingsErrorRect, app.settings.GraphShowErrorOptions)
 	drawText(hdc, "Показывать настройку «При ошибке»", x+62, y+198, w-84, 28, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	if ui2d.active {
+		d2dPopClip()
+	}
 }
 
 func advanceGraphSettingsGearHover() bool {
@@ -448,7 +462,23 @@ func advanceGraphSettingsGearHover() bool {
 			app.graphSettingsHoverAnim = target
 		}
 	}
-	return math.Abs(old-app.graphSettingsHoverAnim) > .001
+	changed := math.Abs(old-app.graphSettingsHoverAnim) > .001
+	if app.graphSettingsOpen && app.graphSettingsPanelAnim < 1 {
+		oldPanel := app.graphSettingsPanelAnim
+		step := .18
+		if app.settings.AnimationMode == 1 {
+			step = .3
+		}
+		if app.settings.AnimationMode == 2 {
+			step = 1
+		}
+		app.graphSettingsPanelAnim += (1 - app.graphSettingsPanelAnim) * step
+		if 1-app.graphSettingsPanelAnim < .01 {
+			app.graphSettingsPanelAnim = 1
+		}
+		changed = changed || oldPanel != app.graphSettingsPanelAnim
+	}
+	return changed
 }
 
 func drawScenarioGraphCloseConfirm(hdc uintptr, body RECT) {
@@ -787,6 +817,7 @@ func handleScenarioGraphClick(x, y int32) bool {
 	}
 	if currentScenarioGraphSession() != nil && pointIn(app.graphSettingsRect, x, y) {
 		app.graphSettingsOpen = true
+		app.graphSettingsPanelAnim = 0
 		playUI(openSound)
 		invalidateScenarioGraphWindows()
 		return true

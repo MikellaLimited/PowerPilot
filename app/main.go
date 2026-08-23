@@ -1050,6 +1050,7 @@ type App struct {
 	graphSettingsSnapRect                  RECT
 	graphSettingsErrorRect                 RECT
 	graphSettingsHoverAnim                 float64
+	graphSettingsPanelAnim                 float64
 	graphSettingsOpen                      bool
 	graphNameRect                          RECT
 	graphNameEdit                          uintptr
@@ -1925,7 +1926,7 @@ func layoutControlsLogical(rc RECT) {
 			y := tabY + i*(42+tabGap)
 			app.settingsTabs[i] = RECT{int32(innerLeft), int32(y), int32(innerLeft + tabW), int32(y + 42)}
 		}
-		app.settingsCompactTabsRect = RECT{int32(innerLeft), int32(bodyBottom - 72), int32(innerLeft + tabW), int32(bodyBottom - 34)}
+		app.settingsCompactTabsRect = RECT{int32(pad + 218), int32(bodyTop + 14), int32(pad + 264), int32(bodyTop + 48)}
 		innerLeft += tabW + 14
 		innerContentW = innerRight - innerLeft
 		app.settingsContentLeft = innerLeft
@@ -1986,8 +1987,7 @@ func layoutControlsLogical(rc RECT) {
 				app.settingsResourceRefreshRects[i] = RECT{}
 			}
 			app.hideZeroResourceProcessesRect = RECT{int32(innerLeft), int32(row9), int32(innerLeft + 28), int32(row9 + 28)}
-			lineX := int(app.wakeScheduledRect.Right) + 12
-			_, app.wakeLeadFieldRect, _ = uiInlineNumberLayout("Пробуждать ПК по расписанию за", "мин", lineX, uiInlineSentenceY(row5), settingsRight, 2)
+			app.wakeLeadFieldRect = RECT{int32(settingsRight - 104), int32(row7 - 2), int32(settingsRight - 42), int32(row7 + 32)}
 			uiPlaceInlineNumberEdit(idWakeLead, app.wakeLeadFieldRect)
 		case 1:
 			rowY := contentY + 26
@@ -2006,12 +2006,14 @@ func layoutControlsLogical(rc RECT) {
 				app.backgroundRects[i] = RECT{int32(x), int32(y), int32(x + bw), int32(y + 44)}
 			}
 			surfY := bgY + 126
-			sw := (settingsContentW - 40) / 5
+			sw := (settingsContentW - 20) / 3
 			for i := 0; i < 5; i++ {
-				x := innerLeft + i*(sw+10)
-				app.surfaceRects[i] = RECT{int32(x), int32(surfY), int32(x + sw), int32(surfY + 46)}
+				row, col := i/3, i%3
+				x := innerLeft + col*(sw+10)
+				y := surfY + row*54
+				app.surfaceRects[i] = RECT{int32(x), int32(y), int32(x + sw), int32(y + 46)}
 			}
-			animY := surfY + 78
+			animY := surfY + 132
 			animW := (settingsContentW - 20) / 3
 			for i := 0; i < 3; i++ {
 				x := innerLeft + i*(animW+10)
@@ -2146,9 +2148,9 @@ func layoutControlsLogical(rc RECT) {
 			app.soundsRect = RECT{int32(innerLeft), int32(contentY + 10), int32(innerLeft + 28), int32(contentY + 38)}
 			trackLeft := innerLeft + 4
 			valueW := 66
-			app.volumeValueRect = RECT{int32(settingsRight - valueW), int32(contentY + 88), int32(settingsRight), int32(contentY + 116)}
+			app.volumeValueRect = RECT{int32(settingsRight - valueW), int32(contentY + 112), int32(settingsRight), int32(contentY + 140)}
 			trackRight := int(app.volumeValueRect.Left) - 18
-			trackY := contentY + 98
+			trackY := contentY + 122
 			app.volumeTrackRect = RECT{int32(trackLeft), int32(trackY), int32(trackRight), int32(trackY + 8)}
 			knobX := trackLeft + (trackRight-trackLeft)*app.settings.SoundVolume/100
 			app.volumeKnobRect = RECT{int32(knobX - 8), int32(trackY - 5), int32(knobX + 8), int32(trackY + 13)}
@@ -2786,7 +2788,7 @@ func layoutControlsLogical(rc RECT) {
 
 		rows := (visibleStepTypes + cols - 1) / cols
 		fieldY := startY + rows*40 + 8
-		contentBottom := fieldY + 76
+		contentBottom := fieldY
 		app.whenFieldRect = RECT{}
 		app.timeFieldRects[0] = RECT{}
 		app.editorBrowseRect = RECT{}
@@ -2823,6 +2825,8 @@ func layoutControlsLogical(rc RECT) {
 				app.powerPlanRects[i] = RECT{int32(x), int32(fieldY + 30), int32(x + pw), int32(fieldY + 68)}
 			}
 			contentBottom = fieldY + 68
+		} else if app.stepDraft.Type == stepLockWorkstation {
+			contentBottom = fieldY + 48
 		} else if app.stepDraft.Type == stepProcessPriority {
 			fieldW := max(180, innerContentW-132)
 			app.timeFieldRects[0] = RECT{int32(innerLeft), int32(fieldY + 28), int32(innerLeft + fieldW), int32(fieldY + 64)}
@@ -2955,7 +2959,7 @@ func settingsVirtualContentHeight() int {
 	case 0:
 		return 10*uiMetricsDefault.SettingsRowStep + 40
 	case 1:
-		return 390
+		return 460
 	case 2:
 		return 0
 	case 3:
@@ -3887,17 +3891,23 @@ func drawSettingsPage(hdc uintptr, body RECT, w int) {
 			label = tabIcons[i]
 		}
 		fontSize := 9
-		flags := uint32(DT_CENTER | DT_VCENTER | DT_WORDBREAK)
-		if uiTextWidth(label, 10, 650)+12 <= int(r.Right-r.Left) {
-			fontSize = 10
-			flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE
-		} else if uiTextWidth(label, 9, 650)+10 <= int(r.Right-r.Left) {
-			fontSize = 9
-			flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE
+		if app.settings.SettingsCompactTabs {
+			fontSize = 15
+		}
+		flags := uint32(DT_CENTER | DT_VCENTER | DT_SINGLELINE)
+		if !app.settings.SettingsCompactTabs {
+			flags = DT_CENTER | DT_VCENTER | DT_WORDBREAK
+			if uiTextWidth(label, 10, 650)+12 <= int(r.Right-r.Left) {
+				fontSize = 10
+				flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE
+			} else if uiTextWidth(label, 9, 650)+10 <= int(r.Right-r.Left) {
+				fontSize = 9
+				flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE
+			}
 		}
 		drawText(hdc, label, int(r.Left)+3, int(r.Top)+2, int(r.Right-r.Left)-6, int(r.Bottom-r.Top)-4, fontSize, 650, theme.text, flags)
 	}
-	compactLabel := "Только иконки"
+	compactLabel := "«"
 	if app.settings.SettingsCompactTabs {
 		compactLabel = "»"
 	}
@@ -3909,7 +3919,7 @@ func drawSettingsPage(hdc uintptr, body RECT, w int) {
 		drawSelectableButton(hdc, app.settingsSectionRects[0], "Управление данными", app.settingsSubpage == 4)
 		drawSelectableButton(hdc, app.settingsSectionRects[1], "Статистика", app.settingsSubpage == 3)
 	}
-	settingsClip := RECT{int32(app.settingsContentLeft), int32(app.settingsContentTop + int(app.settingsScrollPx)), body.Right - 12, body.Bottom - 32}
+	settingsClip := RECT{int32(app.settingsContentLeft - 7), int32(app.settingsContentTop + int(app.settingsScrollPx)), body.Right - 12, body.Bottom - 32}
 	if ui2d.active {
 		d2dPushClip(settingsClip)
 	}
@@ -3996,8 +4006,9 @@ func drawGeneralSettings(hdc uintptr, body RECT) {
 	drawText(hdc, "Текущие ширина и высота сохраняются и блокируют resize.", int(app.lockCurrentRect.Right)+12, int(app.lockCurrentRect.Top)+16, int(body.Right-app.lockCurrentRect.Right)-28, 16, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	drawToggle(hdc, app.wakeScheduledRect, app.settings.WakeScheduledTasks)
 	lineX := int(app.wakeScheduledRect.Right) + 12
-	pr, fr, sr := uiInlineNumberLayout("Пробуждать ПК по расписанию за", "мин", lineX, int(app.wakeScheduledRect.Top)+3, int(body.Right)-18, 2)
-	uiDrawInlineNumber(hdc, "Пробуждать ПК по расписанию за", "мин", pr, fr, sr)
+	drawText(hdc, "Пробуждать ПК по расписанию за", lineX, int(app.wakeScheduledRect.Top)-2, max(80, int(app.wakeLeadFieldRect.Left)-lineX-10), 20, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	roundFill(hdc, app.wakeLeadFieldRect, surfaceButtonColor(), 8)
+	drawText(hdc, "мин", int(app.wakeLeadFieldRect.Right)+5, int(app.wakeLeadFieldRect.Top), 34, int(app.wakeLeadFieldRect.Bottom-app.wakeLeadFieldRect.Top), 10, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	drawText(hdc, "Wake timer Windows", lineX, int(app.wakeScheduledRect.Top)+24, int(body.Right)-lineX-24, 15, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	drawToggle(hdc, app.hotkeysRect, app.settings.GlobalHotkeys)
 	drawText(hdc, "Глобальные горячие клавиши", int(app.hotkeysRect.Right)+12, int(app.hotkeysRect.Top)-2, int(body.Right-app.hotkeysRect.Right)-28, 19, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
@@ -4009,10 +4020,11 @@ func drawGeneralSettings(hdc uintptr, body RECT) {
 
 func drawSoundSettings(hdc uintptr, body RECT) {
 	baseY := app.settingsContentTop + 6
+	left := app.settingsContentLeft
 	drawToggle(hdc, app.soundsRect, app.settings.Sounds)
 	drawText(hdc, "Звуки интерфейса", int(app.soundsRect.Right)+12, int(app.soundsRect.Top)-2, int(body.Right-app.soundsRect.Right)-30, 20, 13, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	drawText(hdc, "Короткие звуки выбора, переходов и выполнения.", int(app.soundsRect.Right)+12, int(app.soundsRect.Top)+17, int(body.Right-app.soundsRect.Right)-30, 16, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	drawText(hdc, "Громкость интерфейса", int(body.Left)+18, baseY+64, 220, 20, 13, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Громкость интерфейса", left, baseY+78, 260, 20, 13, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	if app.volumeTrackRect.Right > app.volumeTrackRect.Left {
 		roundFill(hdc, app.volumeTrackRect, surfaceButtonColor(), 4)
 		filled := app.volumeTrackRect
@@ -4030,10 +4042,11 @@ func drawSoundSettings(hdc uintptr, body RECT) {
 }
 
 func drawInterfaceSettings040(hdc uintptr, body RECT) {
-	drawText(hdc, "Мини-режим", int(body.Left)+18, int(app.miniAlwaysTopRect.Top)-26, 220, 20, 13, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	left := app.settingsContentLeft
+	drawText(hdc, "Мини-режим", left, int(app.miniAlwaysTopRect.Top)-26, 220, 20, 13, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	drawToggle(hdc, app.miniAlwaysTopRect, app.settings.AlwaysOnTopMini)
 	drawText(hdc, "Поверх остальных окон в мини-режиме", int(app.miniAlwaysTopRect.Right)+12, int(app.miniAlwaysTopRect.Top)-1, int(body.Right-app.miniAlwaysTopRect.Right)-30, 20, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc, "Что показывать", int(body.Left)+18, int(app.miniOptionRects[0].Top)-26, 200, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Что показывать", left, int(app.miniOptionRects[0].Top)-26, 200, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	names := []string{"Задача", "Таймер", "Текущий шаг", "Метрики"}
 	vals := []bool{app.settings.MiniShowTask, app.settings.MiniShowCountdown, app.settings.MiniShowStep, app.settings.MiniShowMetrics}
 	for i, r := range app.miniOptionRects {
@@ -4048,7 +4061,7 @@ func drawInterfaceSettings040(hdc uintptr, body RECT) {
 		roundFill(hdc, rv, c, 9)
 		drawText(hdc, names[i], int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 10, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
-	drawText(hdc, "Размер мини-приложения", int(body.Left)+18, int(app.miniSizeRects[0].Top)-26, 240, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Размер мини-приложения", left, int(app.miniSizeRects[0].Top)-26, 240, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	sizeLabels := []string{"Компактный", "Обычный", "Крупный"}
 	sizeValues := []int{90, 100, 120}
 	for i, r := range app.miniSizeRects {
@@ -4063,7 +4076,7 @@ func drawInterfaceSettings040(hdc uintptr, body RECT) {
 		roundFill(hdc, rv, c, 9)
 		drawText(hdc, sizeLabels[i], int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 10, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
-	drawText(hdc, "Масштаб интерфейса", int(body.Left)+18, int(app.uiScaleRects[0].Top)-26, 240, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Масштаб интерфейса", left, int(app.uiScaleRects[0].Top)-26, 240, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	scales := []int{90, 100, 110, 125}
 	for i, r := range app.uiScaleRects {
 		c := surfaceButtonColor()
@@ -4077,8 +4090,8 @@ func drawInterfaceSettings040(hdc uintptr, body RECT) {
 		roundFill(hdc, rv, c, 9)
 		drawText(hdc, fmt.Sprintf("%d%%", scales[i]), int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 11, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
-	drawText(hdc, "Масштаб меняет весь интерфейс PowerPilot, включая поля ввода и размеры минимального окна.", int(body.Left)+18, int(app.uiScaleRects[0].Bottom)+16, int(body.Right-body.Left)-36, 34, 10, 400, theme.muted, DT_LEFT|DT_VCENTER)
-	drawText(hdc, "Размер отдельного редактора", int(body.Left)+18, int(app.graphWindowSizeRects[0].Top)-26, 280, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Масштаб меняет весь интерфейс PowerPilot, включая поля ввода и размеры минимального окна.", left, int(app.uiScaleRects[0].Bottom)+16, int(body.Right)-left-18, 34, 10, 400, theme.muted, DT_LEFT|DT_VCENTER)
+	drawText(hdc, "Размер отдельного редактора", left, int(app.graphWindowSizeRects[0].Top)-26, 280, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	graphSizes := []string{"1280 × 820", "1440 × 900", "1600 × 960"}
 	for i, r := range app.graphWindowSizeRects {
 		drawSelectableButton(hdc, r, graphSizes[i], app.settings.GraphWindowSize == i)
@@ -4092,12 +4105,12 @@ func drawInterfaceSettings040(hdc uintptr, body RECT) {
 	}
 	drawSelectableButton(hdc, app.graphWindowLockRect, lockLabel, app.settings.GraphWindowSizeLocked)
 	timelineTitleY := int(app.resourceTimelineModeRects[0].Top) - 24
-	drawText(hdc, "Временная шкала ресурсов", int(body.Left)+18, timelineTitleY, int(body.Right-body.Left)-36, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Временная шкала ресурсов", left, timelineTitleY, int(body.Right)-left-18, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	modeNames := []string{"Реальное время", "Относительно: −время → 0"}
 	for i, r := range app.resourceTimelineModeRects {
 		drawSelectableButton(hdc, r, modeNames[i], app.settings.ResourceTimelineMode == i)
 	}
-	drawText(hdc, "Количество отметок шкалы", int(body.Left)+18, int(app.resourceTimelineTicksTrackRect.Top)-30, 250, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Количество отметок шкалы", left, int(app.resourceTimelineTicksTrackRect.Top)-30, 250, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	if app.resourceTimelineTicksTrackRect.Right > app.resourceTimelineTicksTrackRect.Left {
 		roundFill(hdc, app.resourceTimelineTicksTrackRect, surfaceButtonColor(), 4)
 		filled := app.resourceTimelineTicksTrackRect
@@ -4111,7 +4124,8 @@ func drawInterfaceSettings040(hdc uintptr, body RECT) {
 
 func drawAppearanceSettings(hdc uintptr, body RECT) {
 	contentY := app.settingsContentTop
-	drawText(hdc, "Тема", int(body.Left)+18, contentY, 120, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	left := app.settingsContentLeft
+	drawText(hdc, "Тема", left, contentY, 120, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	names := []string{"Тёмная ☾", "Светлая ☀", "Системная ◐"}
 	for i, r := range app.themeRects {
 		c := surfaceButtonColor()
@@ -4129,7 +4143,7 @@ func drawAppearanceSettings(hdc uintptr, body RECT) {
 		drawText(hdc, names[i], int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 12, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
 	bgTitleY := int(app.themeRects[0].Bottom) + 12
-	drawText(hdc, "Фон", int(body.Left)+18, bgTitleY, 100, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Фон", left, bgTitleY, 100, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	bgNames := []string{"Однотонный", "Сияние", "Сетка", "Звёзды", "Аврора", "Туманность"}
 	for i, r := range app.backgroundRects {
 		c := surfaceButtonColor()
@@ -4149,7 +4163,7 @@ func drawAppearanceSettings(hdc uintptr, body RECT) {
 		drawBackgroundSample(hdc, preview, i)
 	}
 	surfaceTitleY := int(maxRectBottom(app.backgroundRects[:])) + 8
-	drawText(hdc, "Области и панели", int(body.Left)+18, surfaceTitleY, 180, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Области и панели", left, surfaceTitleY, 180, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	sn := []string{"Классические", "Мягкие", "Акцентные", "Стеклянные", "Жидкое стекло"}
 	for i, r := range app.surfaceRects {
 		c := surfaceButtonColor()
@@ -4164,10 +4178,10 @@ func drawAppearanceSettings(hdc uintptr, body RECT) {
 		if hv > 0 && app.settings.SurfaceStyle != i && ui2d.active {
 			d2dDrawRoundedOutline(rv, 10, float32(1+0.4*hv), blendColor(theme.border, theme.accent2, .42))
 		}
-		drawText(hdc, sn[i], int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 11, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, sn[i], int(r.Left)+6, int(r.Top)+3, int(r.Right-r.Left)-12, int(r.Bottom-r.Top)-6, 10, 650, theme.text, DT_CENTER|DT_VCENTER|DT_WORDBREAK)
 	}
 	animTitleY := int(maxRectBottom(app.surfaceRects[:])) + 8
-	drawText(hdc, "Анимации", int(body.Left)+18, animTitleY, 130, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Анимации", left, animTitleY, 130, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	an := []string{"Полные", "Умеренные", "Отключены"}
 	for i, r := range app.animationRects {
 		c := surfaceButtonColor()
