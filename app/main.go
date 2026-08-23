@@ -644,6 +644,9 @@ type App struct {
 	hoverSeen                              bool
 	hoverKey                               int64
 	hoverRect                              RECT
+	graphHoverAnim                         float64
+	graphHoverKey                          int64
+	graphHoverRect                         RECT
 	tooltipRect                            RECT
 	tooltipText                            string
 	tooltipSince                           time.Time
@@ -1136,6 +1139,7 @@ var deferredEditMoves map[uintptr]RECT
 var drawingInteractiveSurface bool
 var drawingTaskNavigationMenu bool
 var drawingNotificationPanel bool
+var drawingDetachedGraphWindow bool
 
 func rgb(r, g, b byte) uint32 { return uint32(r) | uint32(g)<<8 | uint32(b)<<16 }
 func wstr(s string) *uint16   { p, _ := syscall.UTF16PtrFromString(s); return p }
@@ -1988,8 +1992,8 @@ func layoutControlsLogical(rc RECT) {
 				app.settingsResourceRefreshRects[i] = RECT{}
 			}
 			app.hideZeroResourceProcessesRect = RECT{int32(innerLeft), int32(row9), int32(innerLeft + 28), int32(row9 + 28)}
-			wakeFieldX := minInt(settingsRight-94, innerLeft+318)
-			app.wakeLeadFieldRect = RECT{int32(wakeFieldX), int32(row7), int32(wakeFieldX + 54), int32(row7 + 30)}
+			wakeLineX := innerLeft + 40
+			_, app.wakeLeadFieldRect, _ = uiInlineNumberLayout("Пробуждать ПК по расписанию за", "мин", wakeLineX, row7, settingsRight, 2)
 			uiPlaceInlineNumberEdit(idWakeLead, app.wakeLeadFieldRect)
 		case 1:
 			rowY := contentY + 26
@@ -2147,7 +2151,7 @@ func layoutControlsLogical(rc RECT) {
 			app.showSystemProcessesRect = RECT{int32(innerLeft), int32(row2), int32(innerLeft + 28), int32(row2 + 28)}
 			app.safetyProcessesRect = RECT{int32(innerLeft), int32(row3), int32(minInt(settingsRight, innerLeft+280)), int32(row3 + 42)}
 		case 6:
-			app.soundsRect = RECT{int32(innerLeft), int32(contentY + 104), int32(innerLeft + 28), int32(contentY + 132)}
+			app.soundsRect = RECT{int32(innerLeft), int32(contentY + 82), int32(innerLeft + 28), int32(contentY + 110)}
 			trackLeft := innerLeft + 4
 			valueW := 66
 			app.volumeValueRect = RECT{int32(settingsRight - valueW), int32(contentY + 40), int32(settingsRight), int32(contentY + 68)}
@@ -4377,11 +4381,36 @@ func drawSettingsUpdateCard(hdc uintptr, r, action RECT, title, sub, actionLabel
 	textW := max(90, textRight-int(r.Left)-14)
 	drawText(hdc, title, int(r.Left)+14, int(r.Top)+10, textW, 21, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	drawText(hdc, sub, int(r.Left)+14, int(r.Top)+34, textW, int(r.Bottom-r.Top)-42, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK|DT_END_ELLIPSIS)
-	if busy {
-		drawDisabledButton(hdc, action, actionLabel)
-	} else {
-		drawButton(hdc, action, actionLabel, false)
+	drawUpdateActionButton(hdc, action, actionLabel, busy)
+}
+
+func drawUpdateActionButton(hdc uintptr, r RECT, label string, disabled bool) {
+	if r.Right <= r.Left || r.Bottom <= r.Top {
+		return
 	}
+	h := 0.0
+	if !disabled {
+		h = hoverAmount(r)
+	}
+	rv := expandRect(r, int32(4*h+.5))
+	c := surfaceButtonColor()
+	if disabled {
+		c = blendColor(c, theme.panel, .35)
+	} else if h > 0 {
+		c = blendColor(c, theme.accent2, .08*h)
+	}
+	roundFill(hdc, rv, c, 10)
+	if h > 0 && ui2d.active {
+		d2dDrawRoundedOutline(rv, 10, float32(1+0.5*h), blendColor(theme.border, theme.accent2, .50))
+	}
+	if label == "Проверить обновление" {
+		label = "Проверить\nобновление"
+	}
+	color := theme.text
+	if disabled {
+		color = blendColor(theme.muted, theme.panel, .20)
+	}
+	drawText(hdc, label, int(r.Left)+8, int(r.Top)+3, int(r.Right-r.Left)-16, int(r.Bottom-r.Top)-6, 10, 650, color, DT_CENTER|DT_VCENTER|DT_WORDBREAK)
 }
 
 func drawComponentsSettings(hdc uintptr, body RECT) {
@@ -5545,7 +5574,7 @@ func drawHistorySettings(hdc uintptr, body RECT) {
 	roundFill(hdc, app.historySearchRect, surfaceButtonColor(), 9)
 	items := filteredHistoryItems()
 	if len(items) == 0 {
-		drawText(hdc, "По этому фильтру записей пока нет.", app.settingsContentLeft, int(app.historyFilterRects[0].Bottom)+34, int(body.Right)-app.settingsContentLeft-18, 30, 12, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "По этому фильтру записей пока нет.", app.settingsContentLeft, int(app.historySearchRect.Bottom)+10, int(body.Right)-app.settingsContentLeft-18, 30, 12, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		drawOutlinedButton(hdc, app.historyClearRect, "Очистить", theme.danger)
 		return
 	}
@@ -6412,6 +6441,22 @@ func hoverAmount(r RECT) float64 {
 	}
 	k := rectHoverKey(r)
 	inside := pointIn(r, app.mouseX, app.mouseY)
+	if drawingDetachedGraphWindow {
+		if inside {
+			if app.graphHoverKey != k {
+				app.graphHoverKey = k
+				app.graphHoverRect = r
+				app.graphHoverAnim = .12
+			} else {
+				app.graphHoverRect = r
+			}
+		}
+		if app.graphHoverKey != k {
+			return 0
+		}
+		t := clampFloat(app.graphHoverAnim, 0, 1)
+		return t * t * (3 - 2*t)
+	}
 	if inside {
 		app.hoverSeen = true
 		if app.hoverKey != k {

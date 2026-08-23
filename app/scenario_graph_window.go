@@ -587,9 +587,11 @@ func paintScenarioGraphWindow(hwnd uintptr) {
 	if d2dBegin(hdc, physical) {
 		d2dSetBaseScale040(float32(uiScaleFactor040()))
 		d2dClear(theme.bg)
+		drawingDetachedGraphWindow = true
 		drawScenarioGraphTitleBar(hdc, logical, hwnd)
 		roundFill(hdc, body, surfacePanelColor(), 18)
 		drawScenarioGraphEditor(hdc, body, int(logical.Right), true)
+		drawingDetachedGraphWindow = false
 		d2dEnd()
 		pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
 		paintEnded = true
@@ -598,9 +600,11 @@ func paintScenarioGraphWindow(hwnd uintptr) {
 	}
 	d2dSetBaseScale040(1)
 	fill(hdc, physical, theme.bg)
+	drawingDetachedGraphWindow = true
 	drawScenarioGraphTitleBar(hdc, logical, hwnd)
 	roundFill(hdc, body, surfacePanelColor(), 18)
 	drawScenarioGraphEditor(hdc, body, int(logical.Right), true)
+	drawingDetachedGraphWindow = false
 	pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
 	paintEnded = true
 	repaintVisibleScenarioGraphInputs()

@@ -266,6 +266,12 @@ func graphInputPoint(g *ScenarioGraph, n ScenarioGraphNode) (float32, float32) {
 }
 
 func drawGraphConnection(x1, y1, x2, y2, stroke float32, color uint32) {
+	// A straight connection must be one continuous primitive. Drawing it as
+	// three butt-capped segments leaves anti-aliased sub-pixel gaps at the joins.
+	if math.Abs(float64(y1-y2)) < .5 {
+		d2dDrawLine(x1, y1, x2, y2, stroke, color)
+		return
+	}
 	mid := (x1 + x2) / 2
 	if x2 < x1+42 {
 		mid = x1 + 42
@@ -466,10 +472,11 @@ func advanceGraphSettingsGearHover() bool {
 		}
 	}
 	changed := math.Abs(old-app.graphSettingsHoverAnim) > .001
-	// Detached graph windows have their own timer, so advance the same generic
-	// pop-up animation used by the main window here as well.
+	// Detached graph windows keep their own hover state. Sharing the main-window
+	// state makes both windows repeatedly claim the same animation and causes
+	// buttons to pulse between expanded and normal sizes.
 	hoverTarget := 0.0
-	if app.hoverKey != 0 && pointIn(app.hoverRect, app.mouseX, app.mouseY) {
+	if app.graphHoverKey != 0 && pointIn(app.graphHoverRect, app.mouseX, app.mouseY) {
 		hoverTarget = 1
 	}
 	hoverStep := .34
@@ -479,15 +486,15 @@ func advanceGraphSettingsGearHover() bool {
 	if app.settings.AnimationMode == 2 {
 		hoverStep = 1
 	}
-	oldGeneric := app.hoverAnim
-	app.hoverAnim += (hoverTarget - app.hoverAnim) * hoverStep
-	if math.Abs(app.hoverAnim-hoverTarget) < .01 {
-		app.hoverAnim = hoverTarget
+	oldGeneric := app.graphHoverAnim
+	app.graphHoverAnim += (hoverTarget - app.graphHoverAnim) * hoverStep
+	if math.Abs(app.graphHoverAnim-hoverTarget) < .01 {
+		app.graphHoverAnim = hoverTarget
 	}
-	if hoverTarget == 0 && app.hoverAnim == 0 {
-		app.hoverKey, app.hoverRect = 0, (RECT{})
+	if hoverTarget == 0 && app.graphHoverAnim == 0 {
+		app.graphHoverKey, app.graphHoverRect = 0, (RECT{})
 	}
-	changed = changed || oldGeneric != app.hoverAnim
+	changed = changed || oldGeneric != app.graphHoverAnim
 	if app.graphSettingsOpen {
 		oldPanel := app.graphSettingsPanelAnim
 		target := 1.0
