@@ -187,7 +187,7 @@ func layoutScenarioGraphEditor(body RECT, detached bool) {
 	paletteLeft := left
 	available := max(240, right-paletteLeft-350)
 	paletteGap := 5
-	paletteW := minInt(88, max(58, (available-paletteGap*3)/4))
+	paletteW := minInt(96, max(64, (available-paletteGap*2)/3))
 	for i := range app.graphPaletteRects {
 		x := paletteLeft + i*(paletteW+paletteGap)
 		app.graphPaletteRects[i] = RECT{int32(x), int32(paletteTop), int32(x + paletteW), int32(paletteTop + 30)}
@@ -308,7 +308,10 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	}
 	drawButton(hdc, app.previewRect, "Проверить", false)
 	drawButton(hdc, app.graphSaveRect, "Сохранить", true)
-	gearHover := hoverAmount(app.graphSettingsRect)
+	gearHover := app.graphSettingsHoverAnim
+	if !detached {
+		gearHover = hoverAmount(app.graphSettingsRect)
+	}
 	gearRect := expandRect(app.graphSettingsRect, int32(2*gearHover+.5))
 	roundFill(hdc, gearRect, surfaceButtonColor(), 10)
 	if gearHover > 0 && ui2d.active {
@@ -319,7 +322,7 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	if !detached {
 		drawButton(hdc, app.graphDetachRect, "Открыть отдельно", false)
 	}
-	labels := []string{"+ Усл.", "+ Действ.", "+ Пауза", "+ Финал"}
+	labels := []string{"+ Усл.", "+ Действ.", "+ Финал"}
 	for i, r := range app.graphPaletteRects {
 		drawButton(hdc, r, labels[i], false)
 	}
@@ -414,11 +417,8 @@ func drawScenarioGraphSettingsPanel(hdc uintptr, body RECT) {
 	if !app.graphSettingsOpen || app.graphCloseConfirm {
 		return
 	}
-	if ui2d.active {
-		d2dFillRoundedOpacity(body, rgb(0, 0, 0), 18, .38)
-	}
-	w, h := minInt(560, int(body.Right-body.Left)-48), 190
-	x, y := int(body.Right)-w-24, int(body.Top)+60
+	w, h := minInt(430, int(body.Right-body.Left)-32), 272
+	x, y := int(app.graphSettingsRect.Right)-w, int(app.graphSettingsRect.Bottom)+8
 	app.graphSettingsPanelRect = RECT{int32(x), int32(y), int32(x + w), int32(y + h)}
 	roundFill(hdc, app.graphSettingsPanelRect, surfacePanelColor(), 16)
 	drawText(hdc, "Настройки редактора", x+22, y+18, w-44, 28, 18, 700, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
@@ -426,6 +426,29 @@ func drawScenarioGraphSettingsPanel(hdc uintptr, body RECT) {
 	drawToggle(hdc, app.graphSettingsToggleRect, app.settings.GraphAutoRemoveSingleJunction)
 	drawText(hdc, "Упрощать одиночные соединения", x+62, y+66, w-84, 24, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	drawText(hdc, "Узел с одним входящим проводом автоматически заменяется прямым соединением.", x+62, y+92, w-84, 42, 10, 450, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
+	app.graphSettingsSnapRect = RECT{int32(x + 22), int32(y + 142), int32(x + 50), int32(y + 170)}
+	drawToggle(hdc, app.graphSettingsSnapRect, app.settings.GraphSnapToGrid)
+	drawText(hdc, "Привязывать блоки к сетке", x+62, y+138, w-84, 28, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	app.graphSettingsErrorRect = RECT{int32(x + 22), int32(y + 202), int32(x + 50), int32(y + 230)}
+	drawToggle(hdc, app.graphSettingsErrorRect, app.settings.GraphShowErrorOptions)
+	drawText(hdc, "Показывать настройку «При ошибке»", x+62, y+198, w-84, 28, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+}
+
+func advanceGraphSettingsGearHover() bool {
+	target := 0.0
+	if pointIn(app.graphSettingsRect, app.mouseX, app.mouseY) {
+		target = 1
+	}
+	old := app.graphSettingsHoverAnim
+	if app.settings.AnimationMode == 2 {
+		app.graphSettingsHoverAnim = target
+	} else {
+		app.graphSettingsHoverAnim += (target - app.graphSettingsHoverAnim) * .24
+		if math.Abs(target-app.graphSettingsHoverAnim) < .01 {
+			app.graphSettingsHoverAnim = target
+		}
+	}
+	return math.Abs(old-app.graphSettingsHoverAnim) > .001
 }
 
 func drawScenarioGraphCloseConfirm(hdc uintptr, body RECT) {
@@ -673,8 +696,6 @@ func addGraphPaletteNode(index int) {
 	case 1:
 		kind = graphNodeAction
 	case 2:
-		kind = graphNodeWait
-	case 3:
 		kind = graphNodeFinish
 	default:
 		return
@@ -738,6 +759,20 @@ func handleScenarioGraphClick(x, y int32) bool {
 	if app.graphSettingsOpen {
 		if pointIn(app.graphSettingsToggleRect, x, y) {
 			app.settings.GraphAutoRemoveSingleJunction = !app.settings.GraphAutoRemoveSingleJunction
+			saveSettings()
+			playUI(clickSound)
+			invalidateScenarioGraphWindows()
+			return true
+		}
+		if pointIn(app.graphSettingsSnapRect, x, y) {
+			app.settings.GraphSnapToGrid = !app.settings.GraphSnapToGrid
+			saveSettings()
+			playUI(clickSound)
+			invalidateScenarioGraphWindows()
+			return true
+		}
+		if pointIn(app.graphSettingsErrorRect, x, y) {
+			app.settings.GraphShowErrorOptions = !app.settings.GraphShowErrorOptions
 			saveSettings()
 			playUI(clickSound)
 			invalidateScenarioGraphWindows()
@@ -910,6 +945,15 @@ func finishScenarioGraphPointer() bool {
 		return false
 	}
 	app.graphDragging = false
+	if app.settings.GraphSnapToGrid {
+		const step = 24.0
+		for _, id := range selectedGraphNodeIDs() {
+			if n := ensureCurrentScenarioGraph().node(id); n != nil {
+				n.X = math.Round(n.X/step) * step
+				n.Y = math.Round(n.Y/step) * step
+			}
+		}
+	}
 	pReleaseCapture.Call()
 	persistCurrentScenarioGraph()
 	return true

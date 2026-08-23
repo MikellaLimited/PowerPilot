@@ -33,26 +33,36 @@ func openGraphCompactEditor(nodeID string, item int) {
 }
 
 func openGraphFullEditor(node *ScenarioGraphNode, item int) {
-	usingDetachedInputs := graphEditorEdits != nil && app.edits[idCondText] == graphEditorEdits[idCondText]
+	detached := currentScenarioGraphSession() != nil
+	if detached {
+		ensureGraphFullEditorInputs()
+	}
 	oldSection := app.section
-	switch node.Kind {
-	case graphNodeCondition:
-		openConditionEditor(item)
-		app.graphEditorSection = 8
-	case graphNodeAction:
-		openStepEditor(item)
-		app.graphEditorSection = 9
-	case graphNodeTrigger:
-		loadGraphTriggerIntoLegacyEditor(node)
-		app.graphEditorSection = 15
-	case graphNodeFinish:
-		app.graphEditorSection = 14
+	load := func() {
+		switch node.Kind {
+		case graphNodeCondition:
+			openConditionEditor(item)
+			app.graphEditorSection = 8
+		case graphNodeAction:
+			openStepEditor(item)
+			app.graphEditorSection = 9
+		case graphNodeTrigger:
+			loadGraphTriggerIntoLegacyEditor(node)
+			app.graphEditorSection = 15
+		case graphNodeFinish:
+			app.graphEditorSection = 14
+		}
+	}
+	if detached {
+		withGraphEditorEdits(load)
+	} else {
+		load()
 	}
 	app.section = oldSection
 	app.pageAnim = 1
 	ensureGraphFullEditorInputs()
-	copyGraphEditorInputsFromMain(app.graphEditorSection)
-	if !usingDetachedInputs {
+	if !detached {
+		copyGraphEditorInputsFromMain(app.graphEditorSection)
 		// Opening is the only point where the main window lends its current values.
 		// Restore its own layout immediately; subsequent editor paints are isolated.
 		layoutControls(app.hwnd)
@@ -71,14 +81,22 @@ func openGraphConditionEditor(nodeID string, item int) {
 	app.graphEditorOpen = true
 	app.graphEditorNodeID = nodeID
 	app.graphEditorItem = max(item, 0)
+	detached := currentScenarioGraphSession() != nil
+	if detached {
+		ensureGraphFullEditorInputs()
+	}
 	oldSection := app.section
-	openConditionEditor(item)
+	if detached {
+		withGraphEditorEdits(func() { openConditionEditor(item) })
+	} else {
+		openConditionEditor(item)
+	}
 	app.graphEditorSection = 8
 	app.section = oldSection
 	app.pageAnim = 1
 	ensureGraphFullEditorInputs()
-	copyGraphEditorInputsFromMain(8)
-	if currentScenarioGraphSession() == nil {
+	if !detached {
+		copyGraphEditorInputsFromMain(8)
 		layoutControls(app.hwnd)
 	}
 	invalidateScenarioGraphWindows()

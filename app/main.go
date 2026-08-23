@@ -529,6 +529,8 @@ type Settings struct {
 	Sounds                        bool                  `json:"sounds"`
 	SoundVolume                   int                   `json:"sound_volume"`
 	Notifications                 bool                  `json:"notifications"`
+	TaskMinuteWarningNotification bool                  `json:"task_minute_warning_notification"`
+	NotificationSounds            bool                  `json:"notification_sounds"`
 	WakeScheduledTasks            bool                  `json:"wake_scheduled_tasks"`
 	WakeLeadMinutes               int                   `json:"wake_lead_minutes"`
 	ThemeMode                     int                   `json:"theme_mode"`
@@ -566,6 +568,9 @@ type Settings struct {
 	GraphWindowHeight             int                   `json:"graph_window_height,omitempty"`
 	GraphWindowSizeLocked         bool                  `json:"graph_window_size_locked,omitempty"`
 	GraphAutoRemoveSingleJunction bool                  `json:"graph_auto_remove_single_junction,omitempty"`
+	GraphSnapToGrid               bool                  `json:"graph_snap_to_grid,omitempty"`
+	GraphShowErrorOptions         bool                  `json:"graph_show_error_options"`
+	SettingsCompactTabs           bool                  `json:"settings_compact_tabs,omitempty"`
 	LastScenarioTaskID            string                `json:"last_scenario_task_id,omitempty"`
 	IdleSecondsMigrated           bool                  `json:"idle_seconds_migrated,omitempty"`
 	GlobalHotkeys                 bool                  `json:"global_hotkeys"`
@@ -601,6 +606,7 @@ type Schedule struct {
 	started          time.Time
 	total            time.Duration
 	warned           bool
+	systemWarned     bool
 	conditions       []AutomationCondition
 	triggerLogic     int
 	steps            []ActionStep
@@ -718,6 +724,7 @@ type App struct {
 	wakeLeadFieldRect                      RECT
 	hotkeysRect                            RECT
 	settingsTabs                           [8]RECT
+	settingsCompactTabsRect                RECT
 	settingsSectionRects                   [2]RECT
 	settingsCategory                       int
 	resourceTimelineModeRects              [2]RECT
@@ -726,6 +733,7 @@ type App struct {
 	resourceTimelineTicksValueRect         RECT
 	settingsSubpage                        int
 	settingsContentTop                     int
+	settingsContentLeft                    int
 	settingsScrollTrack                    RECT
 	settingsScrollThumb                    RECT
 	settingsScrollPx                       float64
@@ -736,6 +744,8 @@ type App struct {
 	surfaceRects                           [5]RECT
 	animationRects                         [3]RECT
 	notificationsRect                      RECT
+	minuteWarningRect                      RECT
+	notificationSoundsRect                 RECT
 	recurrenceKindRects                    [3]RECT
 	recurrenceDayRects                     [7]RECT
 	recurrenceEnabledRect                  RECT
@@ -1011,9 +1021,14 @@ type App struct {
 	resourceStatsSortRects                 [6]RECT
 	resourceStatsSort                      int
 	resourceStatsSortDesc                  bool
+	resourceStatsListScrollPx              float64
+	resourceStatsListScrollTarget          float64
+	resourceStatsListScrollMax             float64
+	resourceStatsListScrollTrack           RECT
+	resourceStatsListScrollThumb           RECT
 	conditionGroupCollapsed                map[string]bool
 	graphCanvasRect                        RECT
-	graphPaletteRects                      [4]RECT
+	graphPaletteRects                      [3]RECT
 	graphZoomRects                         [3]RECT
 	graphNodeHits                          []GraphNodeHit
 	graphPortHits                          []GraphPortHit
@@ -1032,6 +1047,9 @@ type App struct {
 	graphSettingsRect                      RECT
 	graphSettingsPanelRect                 RECT
 	graphSettingsToggleRect                RECT
+	graphSettingsSnapRect                  RECT
+	graphSettingsErrorRect                 RECT
+	graphSettingsHoverAnim                 float64
 	graphSettingsOpen                      bool
 	graphNameRect                          RECT
 	graphNameEdit                          uintptr
@@ -1899,12 +1917,19 @@ func layoutControlsLogical(rc RECT) {
 	if app.section == 3 {
 		tabY := bodyTop + 58
 		tabGap := 6
-		tabW := (innerContentW - tabGap*(len(app.settingsTabs)-1)) / len(app.settingsTabs)
-		for i := range app.settingsTabs {
-			x := innerLeft + i*(tabW+tabGap)
-			app.settingsTabs[i] = RECT{int32(x), int32(tabY), int32(x + tabW), int32(tabY + 48)}
+		tabW := 174
+		if app.settings.SettingsCompactTabs {
+			tabW = 52
 		}
-		headerContentY := tabY + 60
+		for i := range app.settingsTabs {
+			y := tabY + i*(42+tabGap)
+			app.settingsTabs[i] = RECT{int32(innerLeft), int32(y), int32(innerLeft + tabW), int32(y + 42)}
+		}
+		app.settingsCompactTabsRect = RECT{int32(innerLeft), int32(bodyBottom - 72), int32(innerLeft + tabW), int32(bodyBottom - 34)}
+		innerLeft += tabW + 14
+		innerContentW = innerRight - innerLeft
+		app.settingsContentLeft = innerLeft
+		headerContentY := tabY
 		for i := range app.settingsSectionRects {
 			app.settingsSectionRects[i] = RECT{}
 		}
@@ -1945,18 +1970,22 @@ func layoutControlsLogical(rc RECT) {
 			row5 := uiSettingsRowTop(contentY, 5)
 			row6 := uiSettingsRowTop(contentY, 6)
 			row7 := uiSettingsRowTop(contentY, 7)
+			row8 := uiSettingsRowTop(contentY, 8)
+			row9 := uiSettingsRowTop(contentY, 9)
 			app.autoRect = RECT{int32(innerLeft), int32(row0), int32(innerLeft + 28), int32(row0 + 28)}
 			app.trayRect = RECT{int32(innerLeft), int32(row1), int32(innerLeft + 28), int32(row1 + 28)}
 			app.notificationsRect = RECT{int32(innerLeft), int32(row2), int32(innerLeft + 28), int32(row2 + 28)}
+			app.minuteWarningRect = RECT{int32(innerLeft), int32(row3), int32(innerLeft + 28), int32(row3 + 28)}
+			app.notificationSoundsRect = RECT{int32(innerLeft), int32(row4), int32(innerLeft + 28), int32(row4 + 28)}
 			app.soundsRect, app.volumeTrackRect, app.volumeKnobRect, app.volumeValueRect = RECT{}, RECT{}, RECT{}, RECT{}
-			app.lockMinimumRect = RECT{int32(innerLeft), int32(row3), int32(innerLeft + 28), int32(row3 + 28)}
-			app.lockCurrentRect = RECT{int32(innerLeft), int32(row4), int32(innerLeft + 28), int32(row4 + 28)}
-			app.wakeScheduledRect = RECT{int32(innerLeft), int32(row5), int32(innerLeft + 28), int32(row5 + 28)}
-			app.hotkeysRect = RECT{int32(innerLeft), int32(row6), int32(innerLeft + 28), int32(row6 + 28)}
+			app.lockMinimumRect = RECT{int32(innerLeft), int32(row5), int32(innerLeft + 28), int32(row5 + 28)}
+			app.lockCurrentRect = RECT{int32(innerLeft), int32(row6), int32(innerLeft + 28), int32(row6 + 28)}
+			app.wakeScheduledRect = RECT{int32(innerLeft), int32(row7), int32(innerLeft + 28), int32(row7 + 28)}
+			app.hotkeysRect = RECT{int32(innerLeft), int32(row8), int32(innerLeft + 28), int32(row8 + 28)}
 			for i := range app.settingsResourceRefreshRects {
 				app.settingsResourceRefreshRects[i] = RECT{}
 			}
-			app.hideZeroResourceProcessesRect = RECT{int32(innerLeft), int32(row7), int32(innerLeft + 28), int32(row7 + 28)}
+			app.hideZeroResourceProcessesRect = RECT{int32(innerLeft), int32(row9), int32(innerLeft + 28), int32(row9 + 28)}
 			lineX := int(app.wakeScheduledRect.Right) + 12
 			_, app.wakeLeadFieldRect, _ = uiInlineNumberLayout("Пробуждать ПК по расписанию за", "мин", lineX, uiInlineSentenceY(row5), settingsRight, 2)
 			uiPlaceInlineNumberEdit(idWakeLead, app.wakeLeadFieldRect)
@@ -2187,6 +2216,8 @@ func layoutControlsLogical(rc RECT) {
 			}
 		case 8:
 			app.graphSettingsToggleRect = RECT{int32(innerLeft), int32(contentY + 18), int32(innerLeft + 28), int32(contentY + 46)}
+			app.graphSettingsSnapRect = RECT{int32(innerLeft), int32(contentY + 86), int32(innerLeft + 28), int32(contentY + 114)}
+			app.graphSettingsErrorRect = RECT{int32(innerLeft), int32(contentY + 154), int32(innerLeft + 28), int32(contentY + 182)}
 		}
 		for _, item := range []struct {
 			id int
@@ -2820,23 +2851,34 @@ func layoutControlsLogical(rc RECT) {
 				contentBottom = fieldY + 72
 			}
 		}
-		// Reserve a complete label row between the dynamic action controls and
-		// the error-policy buttons. The previous 16 px gap made the label overlap
-		// the volume field on one side and the buttons on the other.
+		// Error handling is optional editor chrome; the execution model keeps the
+		// stored policy even while these controls are hidden.
 		errorY := max(fieldY+118, contentBottom+30)
 		errGap := 8
 		errW := (innerContentW - errGap*2) / 3
-		for i := 0; i < 3; i++ {
-			x := innerLeft + i*(errW+errGap)
-			app.stepErrorRects[i] = RECT{int32(x), int32(errorY), int32(x + errW), int32(errorY + 32)}
+		for i := range app.stepErrorRects {
+			app.stepErrorRects[i] = RECT{}
 		}
-		app.stepRetryFieldRect = RECT{int32(innerLeft), int32(errorY + 68), int32(innerLeft + 92), int32(errorY + 98)}
+		if app.settings.GraphShowErrorOptions {
+			for i := 0; i < 3; i++ {
+				x := innerLeft + i*(errW+errGap)
+				app.stepErrorRects[i] = RECT{int32(x), int32(errorY), int32(x + errW), int32(errorY + 32)}
+			}
+		}
+		fieldsY := errorY + 68
+		if !app.settings.GraphShowErrorOptions {
+			fieldsY = contentBottom + 34
+		}
+		app.stepRetryFieldRect = RECT{}
+		if app.settings.GraphShowErrorOptions && app.stepDraft.OnError == 2 {
+			app.stepRetryFieldRect = RECT{int32(innerLeft), int32(fieldsY), int32(innerLeft + 92), int32(fieldsY + 30)}
+		}
 		delayX := innerLeft
-		if app.stepDraft.OnError == 2 {
+		if app.settings.GraphShowErrorOptions && app.stepDraft.OnError == 2 {
 			delayX = innerLeft + 112
 		}
-		app.stepDelayFieldRect = RECT{int32(delayX), int32(errorY + 68), int32(delayX + 92), int32(errorY + 98)}
-		if app.stepDraft.OnError == 2 {
+		app.stepDelayFieldRect = RECT{int32(delayX), int32(fieldsY), int32(delayX + 92), int32(fieldsY + 30)}
+		if app.settings.GraphShowErrorOptions && app.stepDraft.OnError == 2 {
 			move(app.edits[idStepRetries], int(app.stepRetryFieldRect.Left)+6, int(app.stepRetryFieldRect.Top)+7, int(app.stepRetryFieldRect.Right-app.stepRetryFieldRect.Left)-12, 18)
 			pShowWindow.Call(app.edits[idStepRetries], SW_SHOW)
 		}
@@ -2911,7 +2953,7 @@ func resourceTimelineTickCount() int {
 func settingsVirtualContentHeight() int {
 	switch app.settingsSubpage {
 	case 0:
-		return 8*uiMetricsDefault.SettingsRowStep + 40
+		return 10*uiMetricsDefault.SettingsRowStep + 40
 	case 1:
 		return 390
 	case 2:
@@ -2930,7 +2972,7 @@ func settingsVirtualContentHeight() int {
 	case 7:
 		return 770
 	case 8:
-		return 170
+		return 230
 	}
 	return 0
 }
@@ -3826,6 +3868,7 @@ func drawExtraPage(hdc uintptr, body RECT, w int) {
 func drawSettingsPage(hdc uintptr, body RECT, w int) {
 	drawText(hdc, "Настройки", int(body.Left)+18, int(body.Top)+16, 240, 28, 20, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	tabNames := []string{"Общие", "Вид и интерфейс", "Звук", "Защита", "Компоненты и обновления", "Данные", "История", "Редактор"}
+	tabIcons := []string{"●", "◐", "♪", "◆", "↻", "▤", "◷", "⌘"}
 	for i, r := range app.settingsTabs {
 		c := surfaceButtonColor()
 		if i == app.settingsCategory {
@@ -3839,17 +3882,26 @@ func drawSettingsPage(hdc uintptr, body RECT, w int) {
 		if hv > 0 && i != app.settingsCategory && ui2d.active {
 			d2dDrawRoundedOutline(rv, 9, float32(1+0.4*hv), blendColor(theme.border, theme.accent2, .42))
 		}
-		fontSize := 8
+		label := tabNames[i]
+		if app.settings.SettingsCompactTabs {
+			label = tabIcons[i]
+		}
+		fontSize := 9
 		flags := uint32(DT_CENTER | DT_VCENTER | DT_WORDBREAK)
-		if uiTextWidth(tabNames[i], 10, 650)+12 <= int(r.Right-r.Left) {
+		if uiTextWidth(label, 10, 650)+12 <= int(r.Right-r.Left) {
 			fontSize = 10
 			flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE
-		} else if uiTextWidth(tabNames[i], 9, 650)+10 <= int(r.Right-r.Left) {
+		} else if uiTextWidth(label, 9, 650)+10 <= int(r.Right-r.Left) {
 			fontSize = 9
 			flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE
 		}
-		drawText(hdc, tabNames[i], int(r.Left)+3, int(r.Top)+2, int(r.Right-r.Left)-6, int(r.Bottom-r.Top)-4, fontSize, 650, theme.text, flags)
+		drawText(hdc, label, int(r.Left)+3, int(r.Top)+2, int(r.Right-r.Left)-6, int(r.Bottom-r.Top)-4, fontSize, 650, theme.text, flags)
 	}
+	compactLabel := "Только иконки"
+	if app.settings.SettingsCompactTabs {
+		compactLabel = "»"
+	}
+	drawButton(hdc, app.settingsCompactTabsRect, compactLabel, false)
 	if app.settingsCategory == 1 {
 		drawSelectableButton(hdc, app.settingsSectionRects[0], "Оформление", app.settingsSubpage == 1)
 		drawSelectableButton(hdc, app.settingsSectionRects[1], "Интерфейс", app.settingsSubpage == 7)
@@ -3857,7 +3909,7 @@ func drawSettingsPage(hdc uintptr, body RECT, w int) {
 		drawSelectableButton(hdc, app.settingsSectionRects[0], "Управление данными", app.settingsSubpage == 4)
 		drawSelectableButton(hdc, app.settingsSectionRects[1], "Статистика", app.settingsSubpage == 3)
 	}
-	settingsClip := RECT{body.Left, int32(app.settingsContentTop + int(app.settingsScrollPx)), body.Right - 12, body.Bottom - 32}
+	settingsClip := RECT{int32(app.settingsContentLeft), int32(app.settingsContentTop + int(app.settingsScrollPx)), body.Right - 12, body.Bottom - 32}
 	if ui2d.active {
 		d2dPushClip(settingsClip)
 	}
@@ -3910,6 +3962,11 @@ func drawEditorSettings(hdc uintptr, body RECT) {
 	x := int(app.graphSettingsToggleRect.Right) + 12
 	drawText(hdc, "Упрощать одиночные соединения", x, int(app.graphSettingsToggleRect.Top)-2, int(body.Right)-x-28, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	drawText(hdc, "Если в соединительный узел входит только один провод, PowerPilot удалит узел и соединит провода напрямую.", x, int(app.graphSettingsToggleRect.Top)+18, int(body.Right)-x-28, 38, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
+	drawToggle(hdc, app.graphSettingsSnapRect, app.settings.GraphSnapToGrid)
+	drawText(hdc, "Привязывать блоки к сетке", int(app.graphSettingsSnapRect.Right)+12, int(app.graphSettingsSnapRect.Top)-2, int(body.Right-app.graphSettingsSnapRect.Right)-28, 22, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "При перемещении координаты блока фиксируются по шагу сетки.", int(app.graphSettingsSnapRect.Right)+12, int(app.graphSettingsSnapRect.Top)+18, int(body.Right-app.graphSettingsSnapRect.Right)-28, 30, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
+	drawToggle(hdc, app.graphSettingsErrorRect, app.settings.GraphShowErrorOptions)
+	drawText(hdc, "Показывать настройку «При ошибке»", int(app.graphSettingsErrorRect.Right)+12, int(app.graphSettingsErrorRect.Top)-2, int(body.Right-app.graphSettingsErrorRect.Right)-28, 22, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 }
 
 func drawGeneralSettings(hdc uintptr, body RECT) {
@@ -3922,6 +3979,8 @@ func drawGeneralSettings(hdc uintptr, body RECT) {
 		{app.autoRect, app.settings.AutoStart, "Запускать вместе с Windows", "PowerPilot запускается при входе в систему."},
 		{app.trayRect, app.settings.MinimizeToTray, "Сворачивать в трей при закрытии", "Закрытие скрывает окно, не отменяя задачу."},
 		{app.notificationsRect, app.settings.Notifications, "Уведомления Windows", "Предупреждения, автозапуски и защитные блокировки."},
+		{app.minuteWarningRect, app.settings.TaskMinuteWarningNotification, "Предупреждать за минуту", "Системное уведомление за минуту до завершения задачи."},
+		{app.notificationSoundsRect, app.settings.NotificationSounds, "Звук уведомлений", "Разрешить системный звук для уведомлений PowerPilot."},
 	}
 	for i, it := range items {
 		y := baseY + i*uiMetricsDefault.SettingsRowStep
@@ -4316,11 +4375,10 @@ func drawComponentsSettings(hdc uintptr, body RECT) {
 	title, sub := powerPilotUpdateCard()
 	updateAction, updateBusy := powerPilotUpdateActionLabel()
 	drawSettingsUpdateCard(hdc, app.appUpdateRect, app.appUpdateActionRect, title, sub, updateAction, updateBusy)
-	textW := int(app.temperatureAutoUpdateRect.Right - app.temperatureAutoUpdateRect.Left)
-	drawText(hdc, "Проверка обновлений датчиков", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)-1, textW, 19, 11, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	drawText(hdc, "Автоматически при каждом запуске PowerPilot и затем каждые 30 минут. Установка найденного обновления запускается вручную и может запросить UAC.", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)+18, textW, 34, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
-	infoY := int(app.temperatureAutoUpdateRect.Bottom) + 36
-	drawText(hdc, "Аппаратные показатели в «Ресурсы → Продвинутый монитор → Датчики» появляются после установки провайдера. Температуры также используются в обычных карточках ресурсов; для низкоуровневого доступа CPU и платы применяется PawnIO.", int(app.temperatureAutoUpdateRect.Left), infoY, textW, 38, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
+	if temperatureProviderInstalled() {
+		textW := int(app.temperatureAutoUpdateRect.Right - app.temperatureAutoUpdateRect.Left)
+		drawText(hdc, "Датчики: «Ресурсы → Продвинутый монитор → Датчики».", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)+6, textW, 24, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	}
 }
 
 func drawSafetySettings(hdc uintptr, body RECT) {
@@ -5423,12 +5481,14 @@ func drawStepEditor(hdc uintptr, body RECT, w int) {
 		}
 	}
 
-	drawEditorFieldLabel(hdc, "При ошибке", app.stepErrorRects[0], 150)
-	errNames := []string{"Продолжить", "Остановить", "Повторить"}
-	for i, r := range app.stepErrorRects {
-		drawSelectableButton(hdc, r, errNames[i], app.stepDraft.OnError == i)
+	if app.settings.GraphShowErrorOptions {
+		drawEditorFieldLabel(hdc, "При ошибке", app.stepErrorRects[0], 150)
+		errNames := []string{"Продолжить", "Остановить", "Повторить"}
+		for i, r := range app.stepErrorRects {
+			drawSelectableButton(hdc, r, errNames[i], app.stepDraft.OnError == i)
+		}
 	}
-	if app.stepDraft.OnError == 2 {
+	if app.settings.GraphShowErrorOptions && app.stepDraft.OnError == 2 {
 		drawEditorFieldLabel(hdc, "Повторов", app.stepRetryFieldRect, 90)
 		roundFill(hdc, app.stepRetryFieldRect, surfaceButtonColor(), 8)
 	}
@@ -6010,6 +6070,8 @@ func queueSmoothScroll(wheelDelta int16) {
 	case app.section == 19:
 		maxPx := scrollMaxPx(6)
 		app.resourceProcScrollTarget = clampFloat(app.resourceProcScrollTarget-step, 0, maxPx)
+	case app.section == 20 && app.resourceStatsView >= 2:
+		app.resourceStatsListScrollTarget = clampFloat(app.resourceStatsListScrollTarget-step, 0, app.resourceStatsListScrollMax)
 	}
 }
 
@@ -6033,6 +6095,8 @@ func scrollMaxPx(kind int) float64 {
 		return app.settingsScrollMax
 	case 8:
 		return app.notificationScrollMax
+	case 9:
+		return app.resourceStatsListScrollMax
 	default:
 		return 0
 	}
@@ -6080,6 +6144,8 @@ func beginScrollbarInteraction(x, y int32) bool {
 		kind, track, thumb = 5, app.scenarioScrollTrack, app.scenarioScrollThumb
 	case app.section == 19:
 		kind, track, thumb = 6, app.resourceProcScrollTrack, app.resourceProcScrollThumb
+	case app.section == 20 && app.resourceStatsView >= 2 && app.resourceStatsListScrollMax > 0:
+		kind, track, thumb = 9, app.resourceStatsListScrollTrack, app.resourceStatsListScrollThumb
 	}
 	if kind == 0 || (!pointIn(track, x, y) && !pointIn(thumb, x, y)) {
 		return false
@@ -6114,6 +6180,8 @@ func setScrollTargetFromY(kind int, y, grabOffset float64) {
 		track, thumb = app.settingsScrollTrack, app.settingsScrollThumb
 	case 8:
 		track, thumb = app.notificationScrollTrack, app.notificationScrollThumb
+	case 9:
+		track, thumb = app.resourceStatsListScrollTrack, app.resourceStatsListScrollThumb
 	default:
 		return
 	}
@@ -6141,6 +6209,8 @@ func setScrollTargetFromY(kind int, y, grabOffset float64) {
 		app.settingsScrollTarget = target
 	case 8:
 		app.notificationScrollTarget = target
+	case 9:
+		app.resourceStatsListScrollTarget = target
 	}
 }
 
@@ -6166,6 +6236,8 @@ func dragScrollbarTo(y int32) {
 		app.settingsScrollPx = app.settingsScrollTarget
 	case 8:
 		app.notificationScrollPx = app.notificationScrollTarget
+	case 9:
+		app.resourceStatsListScrollPx = app.resourceStatsListScrollTarget
 	}
 	updateScrollGeometry()
 	invalidate(app.hwnd)
@@ -6772,6 +6844,13 @@ func animate() {
 				app.resourceProcScrollPx = app.resourceProcScrollTarget
 			}
 			scrolled = old != app.resourceProcScrollPx
+		case app.section == 20 && app.resourceStatsView >= 2:
+			old := app.resourceStatsListScrollPx
+			app.resourceStatsListScrollPx += (app.resourceStatsListScrollTarget - app.resourceStatsListScrollPx) * scrollStep
+			if abs(app.resourceStatsListScrollPx-app.resourceStatsListScrollTarget) < .08 {
+				app.resourceStatsListScrollPx = app.resourceStatsListScrollTarget
+			}
+			scrolled = old != app.resourceStatsListScrollPx
 		case app.section == 5:
 			old := app.savedScrollPx
 			app.savedScrollPx += (app.savedScrollTarget - app.savedScrollPx) * scrollStep
@@ -7655,6 +7734,7 @@ func onClick(x, y int32) {
 			if pointIn(r, x, y) {
 				if app.resourceStatsView != i {
 					app.resourceStatsView = i
+					app.resourceStatsListScrollPx, app.resourceStatsListScrollTarget = 0, 0
 					app.resourceStatsSort = 0
 					app.resourceStatsSortDesc = false
 					if i < 3 && app.resourceStatsPeriod > 4 {
@@ -7695,6 +7775,14 @@ func onClick(x, y int32) {
 	}
 
 	if app.section == 3 {
+		if pointIn(app.settingsCompactTabsRect, x, y) {
+			app.settings.SettingsCompactTabs = !app.settings.SettingsCompactTabs
+			saveSettings()
+			playUI(clickSound)
+			layoutControls(app.hwnd)
+			invalidate(app.hwnd)
+			return
+		}
 		for i, r := range app.settingsTabs {
 			if pointIn(r, x, y) {
 				if app.settingsCategory == i {
@@ -7837,6 +7925,20 @@ func onClick(x, y int32) {
 				invalidate(app.hwnd)
 				return
 			}
+			if pointIn(app.minuteWarningRect, x, y) {
+				app.settings.TaskMinuteWarningNotification = !app.settings.TaskMinuteWarningNotification
+				saveSettings()
+				playUI(clickSound)
+				invalidate(app.hwnd)
+				return
+			}
+			if pointIn(app.notificationSoundsRect, x, y) {
+				app.settings.NotificationSounds = !app.settings.NotificationSounds
+				saveSettings()
+				playUI(clickSound)
+				invalidate(app.hwnd)
+				return
+			}
 			if pointIn(app.wakeScheduledRect, x, y) {
 				app.settings.WakeScheduledTasks = !app.settings.WakeScheduledTasks
 				syncFields()
@@ -7959,6 +8061,21 @@ func onClick(x, y int32) {
 				app.settings.GraphAutoRemoveSingleJunction = !app.settings.GraphAutoRemoveSingleJunction
 				saveSettings()
 				playUI(clickSound)
+				invalidateScenarioGraphWindows()
+				return
+			}
+			if pointIn(app.graphSettingsSnapRect, x, y) {
+				app.settings.GraphSnapToGrid = !app.settings.GraphSnapToGrid
+				saveSettings()
+				playUI(clickSound)
+				invalidateScenarioGraphWindows()
+				return
+			}
+			if pointIn(app.graphSettingsErrorRect, x, y) {
+				app.settings.GraphShowErrorOptions = !app.settings.GraphShowErrorOptions
+				saveSettings()
+				playUI(clickSound)
+				layoutControls(app.hwnd)
 				invalidateScenarioGraphWindows()
 				return
 			}
@@ -10553,7 +10670,10 @@ func tick() {
 		if warning > 0 && rem <= warning && !app.schedule.warned {
 			app.schedule.warned = true
 			app.status = "Скоро выполнится действие — можно отменить"
-			showNotification("PowerPilot", fmt.Sprintf("%s через %s", actionSummary(), formatDuration(rem)))
+		}
+		if app.settings.TaskMinuteWarningNotification && rem > 0 && rem <= time.Minute && !app.schedule.systemWarned {
+			app.schedule.systemWarned = true
+			showWindowsNotification("PowerPilot", fmt.Sprintf("%s через %s", actionSummary(), formatDuration(rem)))
 		}
 		baseReady = !app.schedule.target.After(now)
 	case 2:
@@ -11132,9 +11252,27 @@ func loadSettings() Settings {
 		if !strings.Contains(string(b), "\"notifications\"") {
 			s.Notifications = true
 		}
+		if !strings.Contains(string(b), "\"task_minute_warning_notification\"") {
+			s.TaskMinuteWarningNotification = true
+		}
+		if !strings.Contains(string(b), "\"notification_sounds\"") {
+			s.NotificationSounds = true
+		}
+		if !strings.Contains(string(b), "\"graph_show_error_options\"") {
+			s.GraphShowErrorOptions = true
+		}
 		if !strings.Contains(string(b), "\"temperature_auto_update\"") {
 			s.TemperatureAutoUpdate = true
 		}
+	}
+	if err != nil {
+		s.Sounds = true
+		s.SoundVolume = 65
+		s.Notifications = true
+		s.TaskMinuteWarningNotification = true
+		s.NotificationSounds = true
+		s.TemperatureAutoUpdate = true
+		s.GraphShowErrorOptions = true
 	}
 	return s
 }

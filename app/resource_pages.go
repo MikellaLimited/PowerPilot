@@ -791,6 +791,18 @@ func statsSortLabel(label string, key int) string {
 	return label + " ↑"
 }
 
+func prepareResourceStatsList(body RECT, listTop, count, stride int) int {
+	viewBottom := int(body.Bottom) - 10
+	viewH := max(1, viewBottom-listTop)
+	contentH := max(0, count*stride)
+	app.resourceStatsListScrollMax = float64(max(0, contentH-viewH))
+	app.resourceStatsListScrollPx = clampFloat(app.resourceStatsListScrollPx, 0, app.resourceStatsListScrollMax)
+	app.resourceStatsListScrollTarget = clampFloat(app.resourceStatsListScrollTarget, 0, app.resourceStatsListScrollMax)
+	app.resourceStatsListScrollTrack = RECT{body.Right - 9, int32(listTop), body.Right - 4, int32(viewBottom)}
+	app.resourceStatsListScrollThumb = scrollThumbRectPixels(app.resourceStatsListScrollTrack, contentH, viewH, app.resourceStatsListScrollPx)
+	return listTop - int(app.resourceStatsListScrollPx)
+}
+
 func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 	drawText(hdc, "Статистика ресурсов", int(body.Left)+18, int(body.Top)+12, 300, 30, 20, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	periodLabels := []string{"1ч", "6ч", "24ч", "7д", "30д", "90д", "1 год", "Всё время"}
@@ -883,25 +895,26 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 				drawCompactSortButton(hdc, app.resourceStatsSortRects[i], statsSortLabel(h, i), app.resourceStatsSort == i)
 			}
 			y += 24
+			listTop := y
+			y = prepareResourceStatsList(body, y, len(apps), 39)
 			for _, a := range apps {
-				if y+36 > int(body.Bottom)-10 {
-					break
-				}
-				r := RECT{int32(left), int32(y), int32(right), int32(y + 34)}
-				roundFill(hdc, r, surfaceButtonColor(), 8)
-				disk := a.ReadKBps + a.WriteKBps
-				vals := []string{a.Name, fmt.Sprintf("%.1f%%", a.CPU), fmt.Sprintf("%.1f%%", a.GPU), formatRAMMB(a.RAMMB), formatRateValueKB(disk), formatRateValueKB(a.NetworkKBps)}
-				for i, v := range vals {
-					flags := uint32(DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS)
-					col := theme.muted
-					if i == 0 {
-						flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS
-						col = theme.text
+				if y >= listTop && y+36 <= int(body.Bottom)-10 {
+					r := RECT{int32(left), int32(y), int32(right - 10), int32(y + 34)}
+					roundFill(hdc, r, surfaceButtonColor(), 8)
+					disk := a.ReadKBps + a.WriteKBps
+					vals := []string{a.Name, fmt.Sprintf("%.1f%%", a.CPU), fmt.Sprintf("%.1f%%", a.GPU), formatRAMMB(a.RAMMB), formatRateValueKB(disk), formatRateValueKB(a.NetworkKBps)}
+					for i, v := range vals {
+						flags := uint32(DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS)
+						col := theme.muted
+						if i == 0 {
+							flags, col = DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS, theme.text
+						}
+						drawText(hdc, v, xs[i]+6, y, ws[i]-12, 34, 8, 500, col, flags)
 					}
-					drawText(hdc, v, xs[i]+6, y, ws[i]-12, 34, 8, 500, col, flags)
 				}
 				y += 39
 			}
+			drawScrollBar(hdc, app.resourceStatsListScrollTrack, app.resourceStatsListScrollThumb)
 			return
 		}
 		if app.resourceStatsView == 3 {
@@ -914,16 +927,18 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 			drawCompactSortButton(hdc, app.resourceStatsSortRects[0], statsSortLabel("Приложение", 0), app.resourceStatsSort == 0)
 			drawCompactSortButton(hdc, app.resourceStatsSortRects[1], statsSortLabel("Потрачено", 1), app.resourceStatsSort == 1)
 			y += 24
+			listTop := y
+			y = prepareResourceStatsList(body, y, len(apps), 39)
 			for _, a := range apps {
-				if y+38 > int(body.Bottom)-10 {
-					break
+				if y >= listTop && y+38 <= int(body.Bottom)-10 {
+					r := RECT{int32(left), int32(y), int32(right - 10), int32(y + 34)}
+					roundFill(hdc, r, surfaceButtonColor(), 8)
+					drawText(hdc, a.Name, left+10, y, nameW-16, 34, 9, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+					drawText(hdc, formatTrafficKB(a.TrafficKB), left+nameW+8, y, right-left-nameW-28, 34, 9, 550, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 				}
-				r := RECT{int32(left), int32(y), int32(right), int32(y + 34)}
-				roundFill(hdc, r, surfaceButtonColor(), 8)
-				drawText(hdc, a.Name, left+10, y, nameW-16, 34, 9, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-				drawText(hdc, formatTrafficKB(a.TrafficKB), left+nameW+8, y, right-left-nameW-18, 34, 9, 550, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 				y += 39
 			}
+			drawScrollBar(hdc, app.resourceStatsListScrollTrack, app.resourceStatsListScrollThumb)
 			return
 		}
 		drawText(hdc, "Активность приложений", left, y, right-left, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
@@ -935,16 +950,18 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 		drawCompactSortButton(hdc, app.resourceStatsSortRects[0], statsSortLabel("Приложение", 0), app.resourceStatsSort == 0)
 		drawCompactSortButton(hdc, app.resourceStatsSortRects[1], statsSortLabel("Активность", 1), app.resourceStatsSort == 1)
 		y += 24
+		listTop := y
+		y = prepareResourceStatsList(body, y, len(apps), 39)
 		for _, a := range apps {
-			if y+38 > int(body.Bottom)-10 {
-				break
+			if y >= listTop && y+38 <= int(body.Bottom)-10 {
+				r := RECT{int32(left), int32(y), int32(right - 10), int32(y + 34)}
+				roundFill(hdc, r, surfaceButtonColor(), 8)
+				drawText(hdc, a.Name, left+10, y, nameW-16, 34, 9, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+				drawText(hdc, formatActivitySeconds(a.ActiveSeconds), left+nameW+8, y, right-left-nameW-28, 34, 9, 550, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 			}
-			r := RECT{int32(left), int32(y), int32(right), int32(y + 34)}
-			roundFill(hdc, r, surfaceButtonColor(), 8)
-			drawText(hdc, a.Name, left+10, y, nameW-16, 34, 9, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-			drawText(hdc, formatActivitySeconds(a.ActiveSeconds), left+nameW+8, y, right-left-nameW-18, 34, 9, 550, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 			y += 39
 		}
+		drawScrollBar(hdc, app.resourceStatsListScrollTrack, app.resourceStatsListScrollThumb)
 		return
 	}
 

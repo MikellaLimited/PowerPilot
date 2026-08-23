@@ -378,7 +378,10 @@ func scenarioGraphWindowProcActive(hwnd uintptr, msg uint32, wParam, lParam uint
 		return 0
 	case WM_TIMER:
 		if wParam == scenarioGraphAnimationTimerID {
-			if animateConditionCatalog() || advanceDetachedEditorScroll() {
+			changed := animateConditionCatalog()
+			changed = advanceDetachedEditorScroll() || changed
+			changed = advanceGraphSettingsGearHover() || changed
+			if changed {
 				pInvalidateRect.Call(hwnd, 0, 0)
 			}
 		}

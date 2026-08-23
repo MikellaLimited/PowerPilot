@@ -921,7 +921,7 @@ func executeOneScenarioStep(step ActionStep, s Schedule) error {
 		if txt == "" {
 			txt = "Сценарий PowerPilot продолжает выполнение."
 		}
-		showNotification("PowerPilot", txt)
+		showWindowsNotification("PowerPilot", txt)
 	case stepMonitorOff:
 		monitorPower040(false)
 	case stepMonitorOn:
