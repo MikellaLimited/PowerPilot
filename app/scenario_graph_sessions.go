@@ -34,7 +34,15 @@ type scenarioGraphSession struct {
 var scenarioGraphSessions = map[uintptr]*scenarioGraphSession{}
 var activeScenarioGraphSession *scenarioGraphSession
 
-func graphSessionOwnsField(name string) bool {
+func graphSessionOwnsField(field reflect.StructField) bool {
+	name := field.Name
+	// Every window owns every piece of layout geometry. The block editor still
+	// reuses the mature form layout code, but its RECT results must never leak
+	// into the main window (or another detached editor) between messages.
+	rectType := reflect.TypeOf(RECT{})
+	if field.Type == rectType || (field.Type.Kind() == reflect.Array && field.Type.Elem() == rectType) {
+		return true
+	}
 	prefixes := []string{
 		"graph", "condition", "step", "editor", "blockEditor", "process", "recurrence",
 		"picker",
@@ -55,7 +63,7 @@ func copyGraphSessionUI(dst, src *App) {
 	dv, sv := reflect.ValueOf(dst).Elem(), reflect.ValueOf(src).Elem()
 	t := dv.Type()
 	for i := 0; i < dv.NumField(); i++ {
-		if !graphSessionOwnsField(t.Field(i).Name) {
+		if !graphSessionOwnsField(t.Field(i)) {
 			continue
 		}
 		// App intentionally keeps its Win32 state package-private. reflect marks

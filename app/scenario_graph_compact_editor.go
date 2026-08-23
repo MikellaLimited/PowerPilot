@@ -78,7 +78,9 @@ func openGraphConditionEditor(nodeID string, item int) {
 	app.pageAnim = 1
 	ensureGraphFullEditorInputs()
 	copyGraphEditorInputsFromMain(8)
-	layoutControls(app.hwnd)
+	if currentScenarioGraphSession() == nil {
+		layoutControls(app.hwnd)
+	}
 	invalidateScenarioGraphWindows()
 }
 

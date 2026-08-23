@@ -280,7 +280,9 @@ func focusMainFromScenarioGraph() {
 }
 
 func invalidateScenarioGraphWindows() {
-	if app.hwnd != 0 {
+	// A detached editor owns its repaint loop. Canvas dragging and block-editor
+	// animation must not continuously invalidate the unrelated main window.
+	if currentScenarioGraphSession() == nil && app.hwnd != 0 {
 		pInvalidateRect.Call(app.hwnd, 0, 0)
 	}
 	for hwnd := range scenarioGraphSessions {
@@ -333,13 +335,6 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 	result := withScenarioGraphSession(hwnd, func() uintptr {
 		return scenarioGraphWindowProcActive(hwnd, msg, wParam, lParam)
 	})
-	// The detached editor reuses a few legacy layout routines. Restore the main
-	// window geometry after its paint so title-bar and header controls cannot be
-	// left with the editor's rectangles.
-	if msg == WM_PAINT && app.hwnd != 0 {
-		layoutControls(app.hwnd)
-		invalidate(app.hwnd)
-	}
 	if session.Closed {
 		delete(scenarioGraphSessions, hwnd)
 		app.graphWindow = 0

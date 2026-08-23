@@ -2,7 +2,10 @@
 
 package main
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestScenarioGraphMigratesLegacyTask(t *testing.T) {
 	legacy := TaskState{
@@ -175,5 +178,49 @@ func TestPruneSingleInputJunctionReconnectsWire(t *testing.T) {
 	g.connect(junction.ID, graphPortNext, to.ID)
 	if !pruneSingleInputJunctions(&g) || len(g.Nodes) != 2 || len(g.Edges) != 1 || g.Edges[0].From != from.ID || g.Edges[0].To != to.ID {
 		t.Fatalf("junction was not simplified: %#v", g)
+	}
+}
+
+func TestEmptyConditionGroupDoesNotBlockActions(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	trigger := newScenarioGraphNode(graphNodeTrigger, 0, 0)
+	trigger.Conditions = []AutomationCondition{{ID: "empty-group", Type: condGroup, Enabled: true}}
+	action := newScenarioGraphNode(graphNodeAction, 200, 0)
+	action.Steps = []ActionStep{
+		{ID: "notify", Type: stepNotify, Text: "test"},
+		{ID: "monitor-off", Type: stepMonitorOff},
+		{ID: "monitor-on", Type: stepMonitorOn},
+	}
+	finish := newScenarioGraphNode(graphNodeFinish, 400, 0)
+	finish.Action = 4
+	g := ScenarioGraph{Version: scenarioGraphVersion, Zoom: 1, Nodes: []ScenarioGraphNode{trigger, action, finish}}
+	g.connect(trigger.ID, graphPortNext, action.ID)
+	g.connect(action.ID, graphPortNext, finish.ID)
+	g = ensureScenarioGraph(g, TaskState{})
+	if len(g.Nodes[0].Conditions) != 0 {
+		t.Fatalf("empty placeholder group was not removed: %#v", g.Nodes[0].Conditions)
+	}
+	called := false
+	result, finished := executeScenarioGraphWithStepRunner(Schedule{action: 0, graph: g}, func(schedule Schedule) bool {
+		called = true
+		if len(schedule.steps) != 3 || schedule.steps[0].Type != stepNotify || schedule.steps[1].Type != stepMonitorOff || schedule.steps[2].Type != stepMonitorOn {
+			t.Fatalf("wrong actions dispatched: %#v", schedule.steps)
+		}
+		return true
+	})
+	if !called || !finished || result != 4 {
+		t.Fatalf("actions were not dispatched through the graph: called=%v finished=%v result=%d", called, finished, result)
+	}
+}
+
+func TestScenarioSessionOwnsEveryLayoutRect(t *testing.T) {
+	typeOfApp := reflect.TypeOf(App{})
+	rectType := reflect.TypeOf(RECT{})
+	for i := 0; i < typeOfApp.NumField(); i++ {
+		field := typeOfApp.Field(i)
+		isGeometry := field.Type == rectType || (field.Type.Kind() == reflect.Array && field.Type.Elem() == rectType)
+		if isGeometry && !graphSessionOwnsField(field) {
+			t.Fatalf("layout field %s is shared between windows", field.Name)
+		}
 	}
 }

@@ -229,8 +229,38 @@ func ensureScenarioGraph(g ScenarioGraph, legacy TaskState) ScenarioGraph {
 		if g.Nodes[i].Kind == graphNodeWait && g.Nodes[i].WaitSecs <= 0 {
 			g.Nodes[i].WaitSecs = 30
 		}
+		g.Nodes[i].Conditions = pruneEmptyConditionGroups(g.Nodes[i].Conditions)
 	}
 	return g
+}
+
+// A group without any leaf condition has no predicate to evaluate. Older
+// editor versions could save such placeholder groups; treating one as false
+// silently blocked every downstream action. Remove empty groups from the
+// outside in while preserving all groups that actually contain conditions.
+func pruneEmptyConditionGroups(src []AutomationCondition) []AutomationCondition {
+	out := append([]AutomationCondition(nil), src...)
+	for {
+		children := make(map[string]bool, len(out))
+		for _, condition := range out {
+			if condition.Enabled && condition.GroupID != "" {
+				children[condition.GroupID] = true
+			}
+		}
+		changed := false
+		filtered := out[:0]
+		for _, condition := range out {
+			if condition.Type == condGroup && !children[condition.ID] {
+				changed = true
+				continue
+			}
+			filtered = append(filtered, condition)
+		}
+		out = filtered
+		if !changed {
+			return out
+		}
+	}
 }
 
 // Early editor builds silently attached this exact CPU condition to every new
@@ -715,6 +745,10 @@ func scenarioGraphValidationError(g ScenarioGraph) string {
 // Every wire carries a boolean signal. This permits fan-out, fan-in and
 // variable-input logic blocks without inventing hidden execution branches.
 func executeScenarioGraph(s Schedule) (int, bool) {
+	return executeScenarioGraphWithStepRunner(s, executeScenarioSteps)
+}
+
+func executeScenarioGraphWithStepRunner(s Schedule, runSteps func(Schedule) bool) (int, bool) {
 	g := cloneScenarioGraph(s.graph)
 	if scenarioGraphValidationError(g) != "" {
 		return s.action, false
@@ -771,11 +805,11 @@ func executeScenarioGraph(s Schedule) (int, bool) {
 		appendRunHistory("GRAPH_NODE", graphNodeKindName(node.Kind)+" · "+graphNodeSummary(*node), s.runID)
 		switch node.Kind {
 		case graphNodeTrigger:
-			ok, _ := evaluateAutomationConditions(node.Conditions)
+			ok, _ := evaluateAutomationConditions(pruneEmptyConditionGroups(node.Conditions))
 			signals[id] = inputAny && ok
 			appendRunHistory("GRAPH_SIGNAL", fmt.Sprintf("%s: вход=%t, условие=%t, выход=%t", graphNodeKindName(node.Kind), inputAny, ok, signals[id]), s.runID)
 		case graphNodeCondition:
-			ok, _ := evaluateAutomationConditions(node.Conditions)
+			ok, _ := evaluateAutomationConditions(pruneEmptyConditionGroups(node.Conditions))
 			signals[id] = inputAny && ok
 			appendRunHistory("GRAPH_SIGNAL", fmt.Sprintf("%s: вход=%t, условие=%t, выход=%t", graphNodeKindName(node.Kind), inputAny, ok, signals[id]), s.runID)
 		case graphNodeLogic:
@@ -790,7 +824,7 @@ func executeScenarioGraph(s Schedule) (int, bool) {
 			}
 			stepSchedule := s
 			stepSchedule.steps = cloneActionSteps(node.Steps)
-			signals[id] = executeScenarioSteps(stepSchedule)
+			signals[id] = runSteps(stepSchedule)
 			appendRunHistory("GRAPH_ACTION", fmt.Sprintf("%s · результат=%t", graphNodeSummary(*node), signals[id]), s.runID)
 		case graphNodeWait:
 			if inputAny {

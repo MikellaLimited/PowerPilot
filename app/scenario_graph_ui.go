@@ -659,8 +659,10 @@ func addGraphNode(kind int) {
 	g.Nodes = append(g.Nodes, n)
 	app.graphSelectedNodeID = n.ID
 	persistCurrentScenarioGraph()
-	layoutControls(app.hwnd)
-	invalidate(app.hwnd)
+	if currentScenarioGraphSession() == nil {
+		layoutControls(app.hwnd)
+		invalidate(app.hwnd)
+	}
 }
 
 func addGraphPaletteNode(index int) {

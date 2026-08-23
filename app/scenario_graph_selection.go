@@ -223,7 +223,9 @@ func deleteGraphSelection() bool {
 	if changed {
 		selectOnlyGraphNode("")
 		persistCurrentScenarioGraph()
-		layoutControls(app.hwnd)
+		if currentScenarioGraphSession() == nil {
+			layoutControls(app.hwnd)
+		}
 		invalidateScenarioGraphWindows()
 	}
 	return changed
@@ -257,7 +259,9 @@ func deleteSelectedGraphNodes() bool {
 	}
 	selectOnlyGraphNode("")
 	persistCurrentScenarioGraph()
-	layoutControls(app.hwnd)
+	if currentScenarioGraphSession() == nil {
+		layoutControls(app.hwnd)
+	}
 	invalidateScenarioGraphWindows()
 	return true
 }
