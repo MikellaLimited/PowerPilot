@@ -106,7 +106,8 @@ func openScenarioGraphWindow() {
 	if taskName == "" {
 		taskName = "Новая задача"
 	}
-	session := &scenarioGraphSession{HWND: hwnd, Graph: graph, TargetID: targetID, SavedTask: saved, TaskName: taskName, Current: cloneScenarioGraph(graph), Fingerprint: scenarioGraphFingerprint(graph)}
+	fingerprint := scenarioGraphFingerprint(graph)
+	session := &scenarioGraphSession{HWND: hwnd, Graph: graph, TargetID: targetID, SavedTask: saved, TaskName: taskName, Current: cloneScenarioGraph(graph), Fingerprint: fingerprint, SavedFingerprint: fingerprint, SavedName: taskName}
 	copyGraphSessionUI(&session.UI, &app)
 	session.UI.graphWindow = hwnd
 	session.UI.graphSelectedNodes = map[string]bool{}
@@ -332,10 +333,14 @@ func scenarioGraphWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) u
 	result := withScenarioGraphSession(hwnd, func() uintptr {
 		return scenarioGraphWindowProcActive(hwnd, msg, wParam, lParam)
 	})
+	// The detached editor reuses a few legacy layout routines. Restore the main
+	// window geometry after its paint so title-bar and header controls cannot be
+	// left with the editor's rectangles.
+	if msg == WM_PAINT && app.hwnd != 0 {
+		layoutControls(app.hwnd)
+		invalidate(app.hwnd)
+	}
 	if session.Closed {
-		if !session.Discard {
-			saveScenarioGraphSession(session)
-		}
 		delete(scenarioGraphSessions, hwnd)
 		app.graphWindow = 0
 		for other := range scenarioGraphSessions {
@@ -494,7 +499,11 @@ func scenarioGraphWindowProcActive(hwnd uintptr, msg uint32, wParam, lParam uint
 			return 0
 		}
 	case WM_CLOSE:
-		if session := currentScenarioGraphSession(); session != nil && !app.exiting && !session.CloseApproved {
+		session := currentScenarioGraphSession()
+		if session != nil && !session.CloseApproved && app.graphEditorOpen {
+			commitOpenGraphEditorBeforeClose()
+		}
+		if session != nil && !app.exiting && !session.CloseApproved && scenarioGraphSessionDirty(session) {
 			app.graphCloseConfirm = true
 			if app.graphNameEdit != 0 {
 				pShowWindow.Call(app.graphNameEdit, SW_HIDE)
@@ -510,7 +519,10 @@ func scenarioGraphWindowProcActive(hwnd uintptr, msg uint32, wParam, lParam uint
 			pInvalidateRect.Call(hwnd, 0, 0)
 			return 0
 		}
-		if session := currentScenarioGraphSession(); session != nil && !session.Discard {
+		if session != nil && app.exiting && !session.Discard {
+			saveScenarioGraphSession(session)
+			markScenarioGraphSessionSaved(session)
+		} else if session != nil && !session.Discard {
 			syncScenarioGraphSessionName(session)
 		}
 		if app.graphEditorOpen {

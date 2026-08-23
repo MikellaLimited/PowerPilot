@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const scenarioGraphVersion = 3
+const scenarioGraphVersion = 4
 
 const (
 	graphNodeTrigger = iota
@@ -139,7 +139,7 @@ func newScenarioGraphNode(kind int, x, y float64) ScenarioGraphNode {
 	switch kind {
 	case graphNodeTrigger:
 		n.Mode, n.DelayMins = 0, 30
-		n.Conditions = []AutomationCondition{{ID: newAutomationID("cond"), Type: condCPU, Logic: logicAND, Compare: -1, Threshold: 10, HoldSeconds: 30, Enabled: true}}
+		n.Conditions = nil
 	case graphNodeCondition:
 		n.Conditions = []AutomationCondition{{ID: newAutomationID("cond"), Type: condCPU, Logic: logicAND, Compare: -1, Threshold: 10, HoldSeconds: 30, Enabled: true}}
 	case graphNodeAction:
@@ -208,11 +208,15 @@ func ensureScenarioGraph(g ScenarioGraph, legacy TaskState) ScenarioGraph {
 	if g.Version <= 0 || len(g.Nodes) == 0 {
 		return graphFromLegacy(legacy)
 	}
+	needsV4Migration := g.Version < 4
 	if g.Version < 2 {
 		g = migrateScenarioGraphV2(g)
 	}
 	if g.Version < 3 {
 		g = migrateScenarioGraphV3(g)
+	}
+	if needsV4Migration {
+		g = migrateScenarioGraphV4(g)
 	}
 	g.Version = scenarioGraphVersion
 	if g.Zoom < .45 || g.Zoom > 2.2 {
@@ -226,6 +230,25 @@ func ensureScenarioGraph(g ScenarioGraph, legacy TaskState) ScenarioGraph {
 			g.Nodes[i].WaitSecs = 30
 		}
 	}
+	return g
+}
+
+// Early editor builds silently attached this exact CPU condition to every new
+// trigger. It looked like an empty condition in the node, but blocked the whole
+// graph at runtime. Remove only that generated signature during migration.
+func migrateScenarioGraphV4(g ScenarioGraph) ScenarioGraph {
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		if n.Kind != graphNodeTrigger || len(n.Conditions) != 1 {
+			continue
+		}
+		c := n.Conditions[0]
+		if c.Type == condCPU && c.Compare == -1 && c.Threshold == 10 && c.HoldSeconds == 30 &&
+			c.Enabled && strings.TrimSpace(c.Text) == "" && strings.TrimSpace(c.GroupID) == "" {
+			n.Conditions = nil
+		}
+	}
+	g.Version = scenarioGraphVersion
 	return g
 }
 
@@ -427,6 +450,44 @@ func (g *ScenarioGraph) removeNode(id string) {
 	g.Edges = edges
 }
 
+func pruneSingleInputJunctions(g *ScenarioGraph) bool {
+	if g == nil {
+		return false
+	}
+	changed := false
+	for {
+		removed := false
+		for _, node := range append([]ScenarioGraphNode(nil), g.Nodes...) {
+			if node.Kind != graphNodeJunction {
+				continue
+			}
+			incoming, outgoing := []ScenarioGraphEdge{}, []ScenarioGraphEdge{}
+			for _, edge := range g.Edges {
+				if edge.To == node.ID {
+					incoming = append(incoming, edge)
+				}
+				if edge.From == node.ID {
+					outgoing = append(outgoing, edge)
+				}
+			}
+			if len(incoming) != 1 {
+				continue
+			}
+			source := incoming[0]
+			g.removeNode(node.ID)
+			for _, edge := range outgoing {
+				g.connect(source.From, source.FromPort, edge.To)
+			}
+			removed, changed = true, true
+			break
+		}
+		if !removed {
+			break
+		}
+	}
+	return changed
+}
+
 func validateScenarioGraph(g ScenarioGraph) []GraphValidationIssue {
 	issues := []GraphValidationIssue{}
 	if len(g.Nodes) == 0 {
@@ -589,7 +650,7 @@ func graphNodeSummary(n ScenarioGraphNode) string {
 		return fmt.Sprintf("%s · %d усл.", graphTriggerSummary(n), len(n.Conditions))
 	case graphNodeCondition:
 		if len(n.Conditions) == 0 {
-			return "Добавьте условия"
+			return ""
 		}
 		if len(n.Conditions) == 1 {
 			return conditionSummary(n.Conditions[0])
@@ -712,9 +773,11 @@ func executeScenarioGraph(s Schedule) (int, bool) {
 		case graphNodeTrigger:
 			ok, _ := evaluateAutomationConditions(node.Conditions)
 			signals[id] = inputAny && ok
+			appendRunHistory("GRAPH_SIGNAL", fmt.Sprintf("%s: вход=%t, условие=%t, выход=%t", graphNodeKindName(node.Kind), inputAny, ok, signals[id]), s.runID)
 		case graphNodeCondition:
 			ok, _ := evaluateAutomationConditions(node.Conditions)
 			signals[id] = inputAny && ok
+			appendRunHistory("GRAPH_SIGNAL", fmt.Sprintf("%s: вход=%t, условие=%t, выход=%t", graphNodeKindName(node.Kind), inputAny, ok, signals[id]), s.runID)
 		case graphNodeLogic:
 			signals[id] = evaluateGraphLogic(node.LogicOp, inputs)
 		case graphNodeJunction:
@@ -722,11 +785,13 @@ func executeScenarioGraph(s Schedule) (int, bool) {
 		case graphNodeAction:
 			if !inputAny {
 				signals[id] = false
+				appendRunHistory("GRAPH_SKIP", "Действие пропущено: входной сигнал не получен · "+graphNodeSummary(*node), s.runID)
 				continue
 			}
 			stepSchedule := s
 			stepSchedule.steps = cloneActionSteps(node.Steps)
 			signals[id] = executeScenarioSteps(stepSchedule)
+			appendRunHistory("GRAPH_ACTION", fmt.Sprintf("%s · результат=%t", graphNodeSummary(*node), signals[id]), s.runID)
 		case graphNodeWait:
 			if inputAny {
 				time.Sleep(time.Duration(max(node.WaitSecs, 1)) * time.Second)

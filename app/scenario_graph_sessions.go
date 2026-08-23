@@ -12,21 +12,23 @@ import (
 )
 
 type scenarioGraphSession struct {
-	HWND          uintptr
-	Graph         ScenarioGraph
-	TargetID      string
-	SavedTask     bool
-	TaskName      string
-	Undo          []ScenarioGraph
-	Redo          []ScenarioGraph
-	Current       ScenarioGraph
-	Fingerprint   string
-	Applying      bool
-	CloseApproved bool
-	Discard       bool
-	UI            App
-	EditorEdits   map[int]uintptr
-	Closed        bool
+	HWND             uintptr
+	Graph            ScenarioGraph
+	TargetID         string
+	SavedTask        bool
+	TaskName         string
+	Undo             []ScenarioGraph
+	Redo             []ScenarioGraph
+	Current          ScenarioGraph
+	Fingerprint      string
+	SavedFingerprint string
+	SavedName        string
+	Applying         bool
+	CloseApproved    bool
+	Discard          bool
+	UI               App
+	EditorEdits      map[int]uintptr
+	Closed           bool
 }
 
 var scenarioGraphSessions = map[uintptr]*scenarioGraphSession{}
@@ -153,9 +155,24 @@ func syncScenarioGraphSessionName(session *scenarioGraphSession) {
 	if session == nil || app.graphNameEdit == 0 {
 		return
 	}
-	if name := strings.TrimSpace(getText(app.graphNameEdit)); name != "" {
-		session.TaskName = name
+	session.TaskName = strings.TrimSpace(getText(app.graphNameEdit))
+}
+
+func scenarioGraphSessionDirty(session *scenarioGraphSession) bool {
+	if session == nil {
+		return false
 	}
+	syncScenarioGraphSessionName(session)
+	return scenarioGraphFingerprint(session.Graph) != session.SavedFingerprint ||
+		strings.TrimSpace(session.TaskName) != strings.TrimSpace(session.SavedName)
+}
+
+func markScenarioGraphSessionSaved(session *scenarioGraphSession) {
+	if session == nil {
+		return
+	}
+	session.SavedFingerprint = scenarioGraphFingerprint(session.Graph)
+	session.SavedName = strings.TrimSpace(session.TaskName)
 }
 
 func scenarioGraphTargetID() (string, bool) {
@@ -228,6 +245,7 @@ func saveScenarioGraphTaskSession(session *scenarioGraphSession) bool {
 	}
 	if session.SavedTask {
 		saveScenarioGraphSession(session)
+		markScenarioGraphSessionSaved(session)
 		showNotification("PowerPilot", "Изменения задачи сохранены.")
 		return true
 	}
@@ -240,6 +258,7 @@ func saveScenarioGraphTaskSession(session *scenarioGraphSession) bool {
 	applyTaskStateToSavedGraph(&task, state, graph)
 	app.settings.SavedTasks = append(app.settings.SavedTasks, task)
 	session.TargetID, session.SavedTask, session.TaskName = task.ID, true, task.Name
+	app.settings.LastScenarioTaskID = task.ID
 	saveSettings()
 	maintainWakeTimer(time.Now())
 	appendHistory("SAVE", task.Name)
@@ -252,6 +271,7 @@ func saveScenarioGraphTaskSession(session *scenarioGraphSession) bool {
 		invalidate(app.hwnd)
 	}
 	showNotification("PowerPilot", "Задача сохранена: "+task.Name)
+	markScenarioGraphSessionSaved(session)
 	return true
 }
 

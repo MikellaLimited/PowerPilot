@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 )
 
 type GraphNodeHit struct {
@@ -61,6 +62,9 @@ func ensureCurrentScenarioGraph() *ScenarioGraph {
 }
 
 func persistCurrentScenarioGraph() {
+	if app.settings.GraphAutoRemoveSingleJunction {
+		pruneSingleInputJunctions(currentScenarioGraph())
+	}
 	if session := currentScenarioGraphSession(); session != nil {
 		session.observeGraphChange()
 		invalidateScenarioGraphWindows()
@@ -172,8 +176,9 @@ func layoutScenarioGraphEditor(body RECT, detached bool) {
 		app.savedScenarioCheckRect = RECT{int32(btnLeft + btnW*2 + gap*2), int32(footerY), int32(right), int32(footerY + 36)}
 		bottom = footerY - 12
 	}
-	app.graphSaveRect = RECT{body.Right - 112, body.Top + 12, body.Right - 14, body.Top + 46}
-	app.previewRect = RECT{body.Right - 220, body.Top + 12, body.Right - 122, body.Top + 46}
+	app.graphSettingsRect = RECT{body.Right - 58, body.Top + 12, body.Right - 14, body.Top + 46}
+	app.graphSaveRect = RECT{body.Right - 166, body.Top + 12, body.Right - 68, body.Top + 46}
+	app.previewRect = RECT{body.Right - 274, body.Top + 12, body.Right - 176, body.Top + 46}
 	if !detached {
 		app.graphDetachRect = RECT{body.Right - 310, body.Top + 12, body.Right - 136, body.Top + 46}
 	}
@@ -202,16 +207,23 @@ func layoutScenarioGraphEditor(body RECT, detached bool) {
 }
 
 func graphNodeHeight(n ScenarioGraphNode) float64 {
-	count := 1
-	if n.Kind == graphNodeTrigger {
-		count = 2
-	} else if n.Kind == graphNodeCondition {
-		count = 1
+	count := 0
+	switch n.Kind {
+	case graphNodeTrigger:
+		if strings.TrimSpace(graphTriggerSummary(n)) != "" {
+			count++
+		}
+		count += len(n.Conditions)
+	case graphNodeCondition:
+		count = len(n.Conditions)
+	case graphNodeAction:
+		count = len(n.Steps)
+	default:
+		if strings.TrimSpace(graphNodeSummary(n)) != "" {
+			count = 1
+		}
 	}
-	if n.Kind == graphNodeAction {
-		count = 1
-	}
-	return float64(74 + minInt(count, 4)*24)
+	return float64(62 + minInt(count, 4)*24)
 }
 
 func graphNodeScreenRect(g *ScenarioGraph, n ScenarioGraphNode) RECT {
@@ -288,7 +300,7 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	roundFill(hdc, app.graphNameRect, surfaceButtonColor(), 9)
 	if app.graphNameEdit != 0 {
 		move(app.graphNameEdit, int(app.graphNameRect.Left)+8, int(app.graphNameRect.Top)+6, max(20, int(app.graphNameRect.Right-app.graphNameRect.Left)-16), 22)
-		if app.graphEditorOpen || app.graphCloseConfirm {
+		if app.graphEditorOpen || app.graphCloseConfirm || app.graphSettingsOpen {
 			pShowWindow.Call(app.graphNameEdit, SW_HIDE)
 		} else {
 			pShowWindow.Call(app.graphNameEdit, SW_SHOW)
@@ -296,6 +308,14 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	}
 	drawButton(hdc, app.previewRect, "Проверить", false)
 	drawButton(hdc, app.graphSaveRect, "Сохранить", true)
+	gearHover := hoverAmount(app.graphSettingsRect)
+	gearRect := expandRect(app.graphSettingsRect, int32(2*gearHover+.5))
+	roundFill(hdc, gearRect, surfaceButtonColor(), 10)
+	if gearHover > 0 && ui2d.active {
+		d2dDrawRoundedOutline(gearRect, 10, 1.2, blendColor(theme.border, theme.accent2, .55))
+	}
+	iconInset := int32(8)
+	d2dDrawSettingsIconRotated(RECT{gearRect.Left + iconInset, gearRect.Top + 3, gearRect.Right - iconInset, gearRect.Bottom - 3}, 150*gearHover)
 	if !detached {
 		drawButton(hdc, app.graphDetachRect, "Открыть отдельно", false)
 	}
@@ -387,6 +407,25 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 		}
 	}
 	drawScenarioGraphCloseConfirm(hdc, body)
+	drawScenarioGraphSettingsPanel(hdc, body)
+}
+
+func drawScenarioGraphSettingsPanel(hdc uintptr, body RECT) {
+	if !app.graphSettingsOpen || app.graphCloseConfirm {
+		return
+	}
+	if ui2d.active {
+		d2dFillRoundedOpacity(body, rgb(0, 0, 0), 18, .38)
+	}
+	w, h := minInt(560, int(body.Right-body.Left)-48), 190
+	x, y := int(body.Right)-w-24, int(body.Top)+60
+	app.graphSettingsPanelRect = RECT{int32(x), int32(y), int32(x + w), int32(y + h)}
+	roundFill(hdc, app.graphSettingsPanelRect, surfacePanelColor(), 16)
+	drawText(hdc, "Настройки редактора", x+22, y+18, w-44, 28, 18, 700, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	app.graphSettingsToggleRect = RECT{int32(x + 22), int32(y + 70), int32(x + 50), int32(y + 98)}
+	drawToggle(hdc, app.graphSettingsToggleRect, app.settings.GraphAutoRemoveSingleJunction)
+	drawText(hdc, "Упрощать одиночные соединения", x+62, y+66, w-84, 24, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	drawText(hdc, "Узел с одним входящим проводом автоматически заменяется прямым соединением.", x+62, y+92, w-84, 42, 10, 450, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
 }
 
 func drawScenarioGraphCloseConfirm(hdc uintptr, body RECT) {
@@ -571,15 +610,19 @@ func drawScenarioGraphNode(hdc uintptr, g *ScenarioGraph, n ScenarioGraphNode) {
 	default:
 		items = append(items, graphNodeSummary(n))
 	}
-	if len(items) == 0 {
-		items = []string{"Дважды нажми для настройки"}
-	}
+	// Empty condition blocks stay visually compact. Double-clicking their body
+	// still opens the editor, but there is no fake condition row to target.
 	rowY := r.Top + headerH + scaled(5, 2)
 	rowH := scaled(22, 6)
 	rowInset, textInset := scaled(9, 3), scaled(4, 1)
 	for i := 0; i < len(items) && i < 4; i++ {
 		rr := RECT{r.Left + rowInset, rowY + int32(i)*rowH, r.Right - rowInset, rowY + int32(i+1)*rowH - scaled(2, 1)}
-		drawText(hdc, items[i], int(rr.Left+textInset), int(rr.Top), max(1, int(rr.Right-rr.Left-textInset*2)), max(1, int(rr.Bottom-rr.Top)), max(3, int(9*z)), 450, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		reserved := scaled(66, 20)
+		textRight := rr.Right - reserved
+		if textRight < rr.Left+scaled(28, 8) {
+			textRight = rr.Right
+		}
+		drawText(hdc, items[i], int(rr.Left+textInset), int(rr.Top), max(1, int(textRight-rr.Left-textInset)), max(1, int(rr.Bottom-rr.Top)), max(3, int(9*z)), 450, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 		if itemKind != 0 && !(n.Kind == graphNodeTrigger && i == 0) {
 			index := i
 			if n.Kind == graphNodeTrigger {
@@ -688,6 +731,27 @@ func handleScenarioGraphClick(x, y int32) bool {
 	}
 	g := ensureCurrentScenarioGraph()
 	if handleScenarioGraphCloseConfirm(x, y) {
+		return true
+	}
+	if app.graphSettingsOpen {
+		if pointIn(app.graphSettingsToggleRect, x, y) {
+			app.settings.GraphAutoRemoveSingleJunction = !app.settings.GraphAutoRemoveSingleJunction
+			saveSettings()
+			playUI(clickSound)
+			invalidateScenarioGraphWindows()
+			return true
+		}
+		if !pointIn(app.graphSettingsPanelRect, x, y) {
+			app.graphSettingsOpen = false
+			playUI(clickSound)
+			invalidateScenarioGraphWindows()
+		}
+		return true
+	}
+	if currentScenarioGraphSession() != nil && pointIn(app.graphSettingsRect, x, y) {
+		app.graphSettingsOpen = true
+		playUI(openSound)
+		invalidateScenarioGraphWindows()
 		return true
 	}
 	if !scenarioGraphDetachedInput && pointIn(app.graphDetachRect, x, y) {

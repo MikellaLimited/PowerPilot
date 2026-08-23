@@ -513,63 +513,65 @@ type SavedTask struct {
 }
 
 type Settings struct {
-	Action                    int                   `json:"action"`
-	Mode                      int                   `json:"mode"`
-	DelayHours                int                   `json:"delay_hours"`
-	DelayMinutes              int                   `json:"delay_minutes"`
-	DelaySeconds              int                   `json:"delay_seconds"`
-	Exact                     string                `json:"exact"`
-	IdleMinutes               int                   `json:"idle_minutes"`
-	WatchProcess              string                `json:"watch_process"`
-	CloseBefore               bool                  `json:"close_before"`
-	Processes                 []string              `json:"processes"`
-	AutoStart                 bool                  `json:"auto_start"`
-	MinimizeToTray            bool                  `json:"minimize_to_tray"`
-	WarningSeconds            int                   `json:"warning_seconds"`
-	Sounds                    bool                  `json:"sounds"`
-	SoundVolume               int                   `json:"sound_volume"`
-	Notifications             bool                  `json:"notifications"`
-	WakeScheduledTasks        bool                  `json:"wake_scheduled_tasks"`
-	WakeLeadMinutes           int                   `json:"wake_lead_minutes"`
-	ThemeMode                 int                   `json:"theme_mode"`
-	Background                int                   `json:"background"`
-	SurfaceStyle              int                   `json:"surface_style"`
-	AnimationMode             int                   `json:"animation_mode"`
-	LockMinimumSize           bool                  `json:"lock_minimum_size"`
-	LockCurrentSize           bool                  `json:"lock_current_size"`
-	LockedWindowW             int                   `json:"locked_window_w,omitempty"`
-	LockedWindowH             int                   `json:"locked_window_h,omitempty"`
-	AdvancedConditions        []AutomationCondition `json:"advanced_conditions,omitempty"`
-	TriggerLogic              int                   `json:"trigger_logic"`
-	ActionSteps               []ActionStep          `json:"action_steps,omitempty"`
-	Recurrence                RecurrenceSpec        `json:"recurrence"`
-	SafetyFullscreen          bool                  `json:"safety_fullscreen"`
-	SafetyRecentInput         bool                  `json:"safety_recent_input"`
-	SafetyIdleMinutes         int                   `json:"safety_idle_minutes"`
-	SafetyProcesses           []string              `json:"safety_processes"`
-	ShowSystemProcesses       bool                  `json:"show_system_processes"`
-	HideZeroResourceProcesses bool                  `json:"hide_zero_resource_processes"`
-	ConfirmedSystemProcesses  []string              `json:"confirmed_system_processes,omitempty"`
-	TaskKind                  int                   `json:"task_kind,omitempty"` // 0 simple, 1 advanced
-	AlwaysOnTopMini           bool                  `json:"always_on_top_mini"`
-	MiniShowTask              bool                  `json:"mini_show_task"`
-	MiniShowCountdown         bool                  `json:"mini_show_countdown"`
-	MiniShowStep              bool                  `json:"mini_show_step"`
-	MiniShowMetrics           bool                  `json:"mini_show_metrics"`
-	MiniSize                  int                   `json:"mini_size"`
-	UIScale                   int                   `json:"ui_scale"`
-	ResourceRefreshMS         int                   `json:"resource_refresh_ms"`
-	ResourceTimelineMode      int                   `json:"resource_timeline_mode,omitempty"` // 0 clock time, 1 relative to current sample
-	ResourceTimelineTicks     int                   `json:"resource_timeline_ticks,omitempty"`
-	GraphWindowSize           int                   `json:"graph_window_size,omitempty"`
-	GraphWindowWidth          int                   `json:"graph_window_width,omitempty"`
-	GraphWindowHeight         int                   `json:"graph_window_height,omitempty"`
-	GraphWindowSizeLocked     bool                  `json:"graph_window_size_locked,omitempty"`
-	IdleSecondsMigrated       bool                  `json:"idle_seconds_migrated,omitempty"`
-	GlobalHotkeys             bool                  `json:"global_hotkeys"`
-	TemperatureAutoUpdate     bool                  `json:"temperature_auto_update"`
-	SavedTasks                []SavedTask           `json:"saved_tasks"`
-	ScenarioGraph             ScenarioGraph         `json:"scenario_graph,omitempty"`
+	Action                        int                   `json:"action"`
+	Mode                          int                   `json:"mode"`
+	DelayHours                    int                   `json:"delay_hours"`
+	DelayMinutes                  int                   `json:"delay_minutes"`
+	DelaySeconds                  int                   `json:"delay_seconds"`
+	Exact                         string                `json:"exact"`
+	IdleMinutes                   int                   `json:"idle_minutes"`
+	WatchProcess                  string                `json:"watch_process"`
+	CloseBefore                   bool                  `json:"close_before"`
+	Processes                     []string              `json:"processes"`
+	AutoStart                     bool                  `json:"auto_start"`
+	MinimizeToTray                bool                  `json:"minimize_to_tray"`
+	WarningSeconds                int                   `json:"warning_seconds"`
+	Sounds                        bool                  `json:"sounds"`
+	SoundVolume                   int                   `json:"sound_volume"`
+	Notifications                 bool                  `json:"notifications"`
+	WakeScheduledTasks            bool                  `json:"wake_scheduled_tasks"`
+	WakeLeadMinutes               int                   `json:"wake_lead_minutes"`
+	ThemeMode                     int                   `json:"theme_mode"`
+	Background                    int                   `json:"background"`
+	SurfaceStyle                  int                   `json:"surface_style"`
+	AnimationMode                 int                   `json:"animation_mode"`
+	LockMinimumSize               bool                  `json:"lock_minimum_size"`
+	LockCurrentSize               bool                  `json:"lock_current_size"`
+	LockedWindowW                 int                   `json:"locked_window_w,omitempty"`
+	LockedWindowH                 int                   `json:"locked_window_h,omitempty"`
+	AdvancedConditions            []AutomationCondition `json:"advanced_conditions,omitempty"`
+	TriggerLogic                  int                   `json:"trigger_logic"`
+	ActionSteps                   []ActionStep          `json:"action_steps,omitempty"`
+	Recurrence                    RecurrenceSpec        `json:"recurrence"`
+	SafetyFullscreen              bool                  `json:"safety_fullscreen"`
+	SafetyRecentInput             bool                  `json:"safety_recent_input"`
+	SafetyIdleMinutes             int                   `json:"safety_idle_minutes"`
+	SafetyProcesses               []string              `json:"safety_processes"`
+	ShowSystemProcesses           bool                  `json:"show_system_processes"`
+	HideZeroResourceProcesses     bool                  `json:"hide_zero_resource_processes"`
+	ConfirmedSystemProcesses      []string              `json:"confirmed_system_processes,omitempty"`
+	TaskKind                      int                   `json:"task_kind,omitempty"` // 0 simple, 1 advanced
+	AlwaysOnTopMini               bool                  `json:"always_on_top_mini"`
+	MiniShowTask                  bool                  `json:"mini_show_task"`
+	MiniShowCountdown             bool                  `json:"mini_show_countdown"`
+	MiniShowStep                  bool                  `json:"mini_show_step"`
+	MiniShowMetrics               bool                  `json:"mini_show_metrics"`
+	MiniSize                      int                   `json:"mini_size"`
+	UIScale                       int                   `json:"ui_scale"`
+	ResourceRefreshMS             int                   `json:"resource_refresh_ms"`
+	ResourceTimelineMode          int                   `json:"resource_timeline_mode,omitempty"` // 0 clock time, 1 relative to current sample
+	ResourceTimelineTicks         int                   `json:"resource_timeline_ticks,omitempty"`
+	GraphWindowSize               int                   `json:"graph_window_size,omitempty"`
+	GraphWindowWidth              int                   `json:"graph_window_width,omitempty"`
+	GraphWindowHeight             int                   `json:"graph_window_height,omitempty"`
+	GraphWindowSizeLocked         bool                  `json:"graph_window_size_locked,omitempty"`
+	GraphAutoRemoveSingleJunction bool                  `json:"graph_auto_remove_single_junction,omitempty"`
+	LastScenarioTaskID            string                `json:"last_scenario_task_id,omitempty"`
+	IdleSecondsMigrated           bool                  `json:"idle_seconds_migrated,omitempty"`
+	GlobalHotkeys                 bool                  `json:"global_hotkeys"`
+	TemperatureAutoUpdate         bool                  `json:"temperature_auto_update"`
+	SavedTasks                    []SavedTask           `json:"saved_tasks"`
+	ScenarioGraph                 ScenarioGraph         `json:"scenario_graph,omitempty"`
 }
 
 type HistoryItem struct {
@@ -715,7 +717,7 @@ type App struct {
 	wakeScheduledRect                      RECT
 	wakeLeadFieldRect                      RECT
 	hotkeysRect                            RECT
-	settingsTabs                           [7]RECT
+	settingsTabs                           [8]RECT
 	settingsSectionRects                   [2]RECT
 	settingsCategory                       int
 	resourceTimelineModeRects              [2]RECT
@@ -1027,6 +1029,10 @@ type App struct {
 	graphInputsNeedRepaint                 bool
 	graphDetachRect                        RECT
 	graphSaveRect                          RECT
+	graphSettingsRect                      RECT
+	graphSettingsPanelRect                 RECT
+	graphSettingsToggleRect                RECT
+	graphSettingsOpen                      bool
 	graphNameRect                          RECT
 	graphNameEdit                          uintptr
 	graphCloseConfirm                      bool
@@ -1893,7 +1899,7 @@ func layoutControlsLogical(rc RECT) {
 	if app.section == 3 {
 		tabY := bodyTop + 58
 		tabGap := 6
-		tabW := (innerContentW - tabGap*6) / 7
+		tabW := (innerContentW - tabGap*(len(app.settingsTabs)-1)) / len(app.settingsTabs)
 		for i := range app.settingsTabs {
 			x := innerLeft + i*(tabW+tabGap)
 			app.settingsTabs[i] = RECT{int32(x), int32(tabY), int32(x + tabW), int32(tabY + 48)}
@@ -2179,6 +2185,8 @@ func layoutControlsLogical(rc RECT) {
 			if app.resourceTimelineTicksValueRect.Bottom > int32(headerContentY) && app.resourceTimelineTicksValueRect.Top < int32(viewportBottom) {
 				pShowWindow.Call(app.edits[idTimelineTicks], SW_SHOW)
 			}
+		case 8:
+			app.graphSettingsToggleRect = RECT{int32(innerLeft), int32(contentY + 18), int32(innerLeft + 28), int32(contentY + 46)}
 		}
 		for _, item := range []struct {
 			id int
@@ -2921,6 +2929,8 @@ func settingsVirtualContentHeight() int {
 		return 150
 	case 7:
 		return 770
+	case 8:
+		return 170
 	}
 	return 0
 }
@@ -3057,6 +3067,14 @@ func resumeCurrentTask() {
 	}
 	app.settings.TaskKind = app.currentTaskKind
 	if app.currentTaskKind == 1 {
+		if app.settings.LastScenarioTaskID != "" {
+			for i := range app.settings.SavedTasks {
+				if app.settings.SavedTasks[i].ID == app.settings.LastScenarioTaskID && app.settings.SavedTasks[i].TaskKind == 1 {
+					openSavedTaskEditor(i)
+					return
+				}
+			}
+		}
 		app.section = 7
 		app.lastTaskSection = 2
 	} else {
@@ -3807,7 +3825,7 @@ func drawExtraPage(hdc uintptr, body RECT, w int) {
 
 func drawSettingsPage(hdc uintptr, body RECT, w int) {
 	drawText(hdc, "Настройки", int(body.Left)+18, int(body.Top)+16, 240, 28, 20, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	tabNames := []string{"Общие", "Вид и интерфейс", "Звук", "Защита", "Компоненты и обновления", "Данные", "История"}
+	tabNames := []string{"Общие", "Вид и интерфейс", "Звук", "Защита", "Компоненты и обновления", "Данные", "История", "Редактор"}
 	for i, r := range app.settingsTabs {
 		c := surfaceButtonColor()
 		if i == app.settingsCategory {
@@ -3868,6 +3886,8 @@ func drawSettingsPage(hdc uintptr, body RECT, w int) {
 		drawSoundSettings(hdc, body)
 	case 7:
 		drawInterfaceSettings040(hdc, body)
+	case 8:
+		drawEditorSettings(hdc, body)
 	}
 	if settingsReveal {
 		d2dResetTransform()
@@ -3883,6 +3903,13 @@ func drawSettingsPage(hdc uintptr, body RECT, w int) {
 	if app.confirmClearHistory {
 		drawHistoryClearConfirmation(hdc, body)
 	}
+}
+
+func drawEditorSettings(hdc uintptr, body RECT) {
+	drawToggle(hdc, app.graphSettingsToggleRect, app.settings.GraphAutoRemoveSingleJunction)
+	x := int(app.graphSettingsToggleRect.Right) + 12
+	drawText(hdc, "Упрощать одиночные соединения", x, int(app.graphSettingsToggleRect.Top)-2, int(body.Right)-x-28, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	drawText(hdc, "Если в соединительный узел входит только один провод, PowerPilot удалит узел и соединит провода напрямую.", x, int(app.graphSettingsToggleRect.Top)+18, int(body.Right)-x-28, 38, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
 }
 
 func drawGeneralSettings(hdc uintptr, body RECT) {
@@ -7675,7 +7702,7 @@ func onClick(x, y int32) {
 				}
 				syncFields()
 				app.settingsCategory = i
-				pages := []int{0, 1, 6, 5, 4, 4, 2}
+				pages := []int{0, 1, 6, 5, 4, 4, 2, 8}
 				app.settingsSubpage = pages[i]
 				app.settingsScrollPx, app.settingsScrollTarget = 0, 0
 				app.confirmClearHistory = false
@@ -7926,6 +7953,14 @@ func onClick(x, y int32) {
 					playUI(clickSound)
 					return
 				}
+			}
+		case 8:
+			if pointIn(app.graphSettingsToggleRect, x, y) {
+				app.settings.GraphAutoRemoveSingleJunction = !app.settings.GraphAutoRemoveSingleJunction
+				saveSettings()
+				playUI(clickSound)
+				invalidateScenarioGraphWindows()
+				return
 			}
 		case 1:
 			for i, r := range app.themeRects {
@@ -9919,6 +9954,8 @@ func openSavedTaskEditor(idx int) {
 	pSetWindowTextW.Call(app.edits[idWarning], uintptr(unsafe.Pointer(wstr(strconv.Itoa(max(app.savedEditDraft.WarningSeconds, 0))))))
 	app.savedMenuOpenIdx = -1
 	if app.savedEditDraft.TaskKind == 1 {
+		app.settings.LastScenarioTaskID = app.savedEditDraft.ID
+		saveSettings()
 		resetGraphInteraction()
 		app.scenarioSavedDraft = true
 		app.scenarioReturnSection = 5

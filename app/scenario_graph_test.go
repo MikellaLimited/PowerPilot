@@ -67,6 +67,7 @@ func TestScenarioGraphV2MergesOldTriggerAndCondition(t *testing.T) {
 	trigger := newScenarioGraphNode(graphNodeTrigger, 0, 0)
 	trigger.Conditions = nil
 	condition := newScenarioGraphNode(graphNodeCondition, 200, 0)
+	condition.Conditions[0].Threshold = 25
 	action := newScenarioGraphNode(graphNodeAction, 400, 0)
 	old := ScenarioGraph{
 		Version: 1,
@@ -154,5 +155,25 @@ func TestScenarioGraphCloneIsDeep(t *testing.T) {
 		if len(node.Steps) > 0 && node.Steps[0].Text == "changed" {
 			t.Fatal("step slice was shared")
 		}
+	}
+}
+
+func TestScenarioGraphV4RemovesGeneratedDefaultCondition(t *testing.T) {
+	trigger := ScenarioGraphNode{ID: "trigger", Kind: graphNodeTrigger, Conditions: []AutomationCondition{{ID: "generated", Type: condCPU, Compare: -1, Threshold: 10, HoldSeconds: 30, Enabled: true}}}
+	g := ensureScenarioGraph(ScenarioGraph{Version: 3, Zoom: 1, Nodes: []ScenarioGraphNode{trigger}}, TaskState{})
+	if len(g.Nodes[0].Conditions) != 0 {
+		t.Fatalf("generated default condition survived migration: %#v", g.Nodes[0].Conditions)
+	}
+}
+
+func TestPruneSingleInputJunctionReconnectsWire(t *testing.T) {
+	from := newScenarioGraphNode(graphNodeTrigger, 0, 0)
+	junction := newScenarioGraphNode(graphNodeJunction, 100, 0)
+	to := newScenarioGraphNode(graphNodeAction, 200, 0)
+	g := ScenarioGraph{Version: scenarioGraphVersion, Nodes: []ScenarioGraphNode{from, junction, to}}
+	g.connect(from.ID, graphPortNext, junction.ID)
+	g.connect(junction.ID, graphPortNext, to.ID)
+	if !pruneSingleInputJunctions(&g) || len(g.Nodes) != 2 || len(g.Edges) != 1 || g.Edges[0].From != from.ID || g.Edges[0].To != to.ID {
+		t.Fatalf("junction was not simplified: %#v", g)
 	}
 }
