@@ -4,8 +4,24 @@ package main
 
 import (
 	"math"
+	"syscall"
 	"testing"
+	"unsafe"
 )
+
+func TestMIBIfRow2LayoutMatchesWindowsABI(t *testing.T) {
+	var row mibIfRow2
+	if size := unsafe.Sizeof(row); size != 1352 {
+		t.Fatalf("unexpected MIB_IF_ROW2 size: %d", size)
+	}
+	if offset := unsafe.Offsetof(row.InOctets); offset != 1208 {
+		t.Fatalf("unexpected InOctets offset: %d", offset)
+	}
+	var table mibIfTable2
+	if offset := unsafe.Offsetof(table.Table); offset != 8 {
+		t.Fatalf("unexpected MIB_IF_TABLE2 row offset: %d", offset)
+	}
+}
 
 func TestNormalizeMetricSnapshotChecksAllResourceCards(t *testing.T) {
 	s := MetricSnapshot{
@@ -26,21 +42,20 @@ func TestNormalizeMetricSnapshotChecksAllResourceCards(t *testing.T) {
 }
 
 func TestUsableNetworkInterfaceRejectsDuplicateSources(t *testing.T) {
-	physical := mibIfRow{AdminStatus: 1, OperStatus: 5, Type: 71}
-	copy(physical.Descr[:], []byte("Intel Wi-Fi 6"))
-	physical.DescrLen = uint32(len("Intel Wi-Fi 6"))
-	if !usableNetworkInterface(&physical) {
+	physical := mibIfRow2{AdminStatus: 1, OperStatus: 1, MediaConnectState: 1, InterfaceFlags: 0x01, Type: 71}
+	copy(physical.Description[:], syscall.StringToUTF16("Intel Wi-Fi 6"))
+	if !usableNetworkInterface2(&physical) {
 		t.Fatal("active physical interface was rejected")
 	}
 	virtual := physical
-	copy(virtual.Descr[:], []byte("Hyper-V Virtual Ethernet Adapter"))
-	virtual.DescrLen = uint32(len("Hyper-V Virtual Ethernet Adapter"))
-	if usableNetworkInterface(&virtual) {
+	virtual.InterfaceFlags = 0
+	copy(virtual.Description[:], syscall.StringToUTF16("Hyper-V Virtual Ethernet Adapter"))
+	if usableNetworkInterface2(&virtual) {
 		t.Fatal("virtual adapter would duplicate physical network traffic")
 	}
 	disconnected := physical
-	disconnected.OperStatus = 2
-	if usableNetworkInterface(&disconnected) {
+	disconnected.MediaConnectState = 2
+	if usableNetworkInterface2(&disconnected) {
 		t.Fatal("disconnected interface was accepted")
 	}
 }

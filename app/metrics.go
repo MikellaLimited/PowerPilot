@@ -22,7 +22,8 @@ var (
 	pPdhCollectQueryData    = metricPdh.NewProc("PdhCollectQueryData")
 	pPdhGetFormattedCounter = metricPdh.NewProc("PdhGetFormattedCounterValue")
 	pPdhCloseQuery          = metricPdh.NewProc("PdhCloseQuery")
-	pGetIfTable             = metricIP.NewProc("GetIfTable")
+	pGetIfTable2            = metricIP.NewProc("GetIfTable2")
+	pFreeMibTable           = metricIP.NewProc("FreeMibTable")
 )
 
 const pdhFmtDouble = 0x00000200
@@ -34,31 +35,59 @@ type pdhFmtValue struct {
 	Double  float64
 }
 
-type mibIfRow struct {
-	Name            [256]uint16
-	Index           uint32
-	Type            uint32
-	MTU             uint32
-	Speed           uint32
-	PhysAddrLen     uint32
-	PhysAddr        [8]byte
-	AdminStatus     uint32
-	OperStatus      uint32
-	LastChange      uint32
-	InOctets        uint32
-	InUcastPkts     uint32
-	InNUcastPkts    uint32
-	InDiscards      uint32
-	InErrors        uint32
-	InUnknownProtos uint32
-	OutOctets       uint32
-	OutUcastPkts    uint32
-	OutNUcastPkts   uint32
-	OutDiscards     uint32
-	OutErrors       uint32
-	OutQLen         uint32
-	DescrLen        uint32
-	Descr           [256]byte
+type mibIfRow2 struct {
+	InterfaceLuid      uint64
+	InterfaceIndex     uint32
+	InterfaceGuid      [16]byte
+	Alias              [257]uint16
+	Description        [257]uint16
+	PhysicalAddrLen    uint32
+	PhysicalAddress    [32]byte
+	PermanentAddress   [32]byte
+	MTU                uint32
+	Type               uint32
+	TunnelType         uint32
+	MediaType          uint32
+	PhysicalMediumType uint32
+	AccessType         uint32
+	DirectionType      uint32
+	InterfaceFlags     byte
+	_padding           [3]byte
+	OperStatus         uint32
+	AdminStatus        uint32
+	MediaConnectState  uint32
+	NetworkGuid        [16]byte
+	ConnectionType     uint32
+	TransmitLinkSpeed  uint64
+	ReceiveLinkSpeed   uint64
+	InOctets           uint64
+	InUcastPkts        uint64
+	InNUcastPkts       uint64
+	InDiscards         uint64
+	InErrors           uint64
+	InUnknownProtos    uint64
+	InUcastOctets      uint64
+	InMulticastOctets  uint64
+	InBroadcastOctets  uint64
+	OutOctets          uint64
+	OutUcastPkts       uint64
+	OutNUcastPkts      uint64
+	OutDiscards        uint64
+	OutErrors          uint64
+	OutUcastOctets     uint64
+	OutMulticastOctets uint64
+	OutBroadcastOctets uint64
+	OutQLen            uint64
+}
+
+type mibIfTable2 struct {
+	NumEntries uint32
+	_padding   uint32
+	Table      [1]mibIfRow2
+}
+
+type networkCounterPair struct {
+	in, out uint64
 }
 
 type DiskMetric struct {
@@ -93,7 +122,7 @@ var metricState struct {
 	stop                        chan struct{}
 	cpuIdle, cpuKernel, cpuUser uint64
 	cpuInit                     bool
-	netPrev                     map[uint32]uint64
+	netPrev                     map[uint32]networkCounterPair
 	netAt                       time.Time
 	diskQuery                   uintptr
 	diskCounter                 uintptr
@@ -117,7 +146,7 @@ func startMetricSampler() {
 	}
 	metricState.stop = make(chan struct{})
 	stopCh := metricState.stop
-	metricState.netPrev = map[uint32]uint64{}
+	metricState.netPrev = map[uint32]networkCounterPair{}
 	metricState.snap.GPU = -1
 	metricState.snap.DiskPercent = -1
 	metricState.snap.VRAMUsedMB = -1
@@ -313,43 +342,41 @@ func sampleCPU() float64 {
 }
 
 func sampleNetwork() (float64, float64) {
-	var size uint32
-	pGetIfTable.Call(0, uintptr(unsafe.Pointer(&size)), 0)
-	if size < 4 {
+	var tablePtr uintptr
+	r, _, _ := pGetIfTable2.Call(uintptr(unsafe.Pointer(&tablePtr)))
+	if uint32(r) != 0 || tablePtr == 0 {
 		return 0, 0
 	}
-	buf := make([]byte, size)
-	r, _, _ := pGetIfTable.Call(uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)), 0)
-	if uint32(r) != 0 {
+	defer pFreeMibTable.Call(tablePtr)
+	table := (*mibIfTable2)(unsafe.Pointer(tablePtr))
+	count := int(table.NumEntries)
+	if count < 0 || count > 65536 {
 		return 0, 0
 	}
-	count := *(*uint32)(unsafe.Pointer(&buf[0]))
-	rowSize := int(unsafe.Sizeof(mibIfRow{}))
+	rows := unsafe.Slice(&table.Table[0], count)
 	now := time.Now()
 	metricState.Lock()
 	defer metricState.Unlock()
 	if metricState.netPrev == nil {
-		metricState.netPrev = map[uint32]uint64{}
+		metricState.netPrev = map[uint32]networkCounterPair{}
 	}
 	var inDiff, outDiff uint64
-	for i := 0; i < int(count); i++ {
-		off := 4 + i*rowSize
-		if off+rowSize > len(buf) {
-			break
-		}
-		row := (*mibIfRow)(unsafe.Pointer(&buf[off]))
-		if !usableNetworkInterface(row) {
+	for i := range rows {
+		row := &rows[i]
+		if !usableNetworkInterface2(row) {
 			continue
 		}
 		curIn, curOut := row.InOctets, row.OutOctets
-		if prev, ok := metricState.netPrev[row.Index]; ok {
-			prevIn := uint32(prev >> 32)
-			prevOut := uint32(prev)
-			inDiff += uint64(uint32(curIn - prevIn))
-			outDiff += uint64(uint32(curOut - prevOut))
+		if prev, ok := metricState.netPrev[row.InterfaceIndex]; ok {
+			// A reset/reconnect must not look like a multi-terabyte transfer.
+			if curIn >= prev.in {
+				inDiff += curIn - prev.in
+			}
+			if curOut >= prev.out {
+				outDiff += curOut - prev.out
+			}
 		}
-		// Store both 32-bit counters in one uint64-sized map value.
-		metricState.netPrev[row.Index] = uint64(curIn)<<32 | uint64(curOut)
+		metricState.netPrev[row.InterfaceIndex] = networkCounterPair{in: curIn, out: curOut}
 	}
 	if metricState.netAt.IsZero() {
 		metricState.netAt = now
@@ -363,20 +390,16 @@ func sampleNetwork() (float64, float64) {
 	return float64(inDiff) / seconds, float64(outDiff) / seconds
 }
 
-func usableNetworkInterface(row *mibIfRow) bool {
-	if row == nil || row.AdminStatus != 1 || row.OperStatus != 5 {
+func usableNetworkInterface2(row *mibIfRow2) bool {
+	if row == nil || row.AdminStatus != 1 || row.OperStatus != 1 || row.MediaConnectState != 1 {
 		return false
 	}
-	// Software loopback and tunnel adapters either duplicate physical traffic
-	// or report traffic that never reaches the network card.
-	if row.Type == 24 || row.Type == 131 {
+	// The HardwareInterface flag is supplied by NDIS and excludes filter,
+	// tunnel and virtual stack entries that otherwise duplicate NIC traffic.
+	if row.InterfaceFlags&0x01 == 0 || row.InterfaceFlags&0x02 != 0 || row.Type == 24 || row.Type == 131 {
 		return false
 	}
-	n := int(row.DescrLen)
-	if n > len(row.Descr) {
-		n = len(row.Descr)
-	}
-	description := strings.ToLower(string(row.Descr[:n]))
+	description := strings.ToLower(syscall.UTF16ToString(row.Description[:]))
 	for _, marker := range []string{"virtual", "hyper-v", "vmware", "loopback", "tunnel", "teredo", "isatap", "wintun", "wireguard", "tap-windows"} {
 		if strings.Contains(description, marker) {
 			return false
