@@ -563,6 +563,7 @@ type Settings struct {
 	ResourceRefreshMS             int                   `json:"resource_refresh_ms"`
 	ResourceTimelineMode          int                   `json:"resource_timeline_mode,omitempty"` // 0 clock time, 1 relative to current sample
 	ResourceTimelineTicks         int                   `json:"resource_timeline_ticks,omitempty"`
+	NetworkRateBits               bool                  `json:"network_rate_bits,omitempty"`
 	GraphWindowSize               int                   `json:"graph_window_size,omitempty"`
 	GraphWindowWidth              int                   `json:"graph_window_width,omitempty"`
 	GraphWindowHeight             int                   `json:"graph_window_height,omitempty"`
@@ -734,6 +735,7 @@ type App struct {
 	resourceTimelineTicksTrackRect         RECT
 	resourceTimelineTicksKnobRect          RECT
 	resourceTimelineTicksValueRect         RECT
+	networkRateUnitRects                   [2]RECT
 	settingsSubpage                        int
 	settingsContentTop                     int
 	settingsContentLeft                    int
@@ -2223,6 +2225,13 @@ func layoutControlsLogical(rc RECT) {
 			if app.resourceTimelineTicksValueRect.Bottom > int32(headerContentY) && app.resourceTimelineTicksValueRect.Top < int32(viewportBottom) {
 				pShowWindow.Call(app.edits[idTimelineTicks], SW_SHOW)
 			}
+			unitY := tickY + 70
+			unitGap := 8
+			unitW := (settingsContentW - unitGap) / 2
+			for i := range app.networkRateUnitRects {
+				x := innerLeft + i*(unitW+unitGap)
+				app.networkRateUnitRects[i] = RECT{int32(x), int32(unitY), int32(x + unitW), int32(unitY + 38)}
+			}
 		case 8:
 			app.graphSettingsToggleRect = RECT{int32(innerLeft), int32(contentY + 18), int32(innerLeft + 28), int32(contentY + 46)}
 			app.graphSettingsSnapRect = RECT{int32(innerLeft), int32(contentY + 86), int32(innerLeft + 28), int32(contentY + 114)}
@@ -2981,7 +2990,7 @@ func settingsVirtualContentHeight() int {
 	case 6:
 		return 150
 	case 7:
-		return 770
+		return 850
 	case 8:
 		return 230
 	}
@@ -4126,6 +4135,13 @@ func drawInterfaceSettings040(hdc uintptr, body RECT) {
 		d2dFillEllipse(float32((app.resourceTimelineTicksKnobRect.Left+app.resourceTimelineTicksKnobRect.Right)/2), float32((app.resourceTimelineTicksKnobRect.Top+app.resourceTimelineTicksKnobRect.Bottom)/2), 9, 9, theme.text)
 		d2dFillEllipse(float32((app.resourceTimelineTicksKnobRect.Left+app.resourceTimelineTicksKnobRect.Right)/2), float32((app.resourceTimelineTicksKnobRect.Top+app.resourceTimelineTicksKnobRect.Bottom)/2), 5, 5, theme.accent)
 		roundFill(hdc, app.resourceTimelineTicksValueRect, surfaceButtonColor(), 8)
+	}
+	if app.networkRateUnitRects[0].Right > app.networkRateUnitRects[0].Left {
+		drawText(hdc, "Единицы сетевой скорости", left, int(app.networkRateUnitRects[0].Top)-28, int(body.Right)-left-18, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		unitNames := []string{"Байты/с · КБ, МБ, ГБ", "Биты/с · Кбит, Мбит, Гбит"}
+		for i, r := range app.networkRateUnitRects {
+			drawSelectableButton(hdc, r, unitNames[i], app.settings.NetworkRateBits == (i == 1))
+		}
 	}
 }
 
@@ -8034,6 +8050,15 @@ func onClick(x, y int32) {
 				return
 			}
 		case 7:
+			for i, r := range app.networkRateUnitRects {
+				if pointIn(r, x, y) {
+					app.settings.NetworkRateBits = i == 1
+					saveSettings()
+					playUI(clickSound)
+					invalidate(app.hwnd)
+					return
+				}
+			}
 			for i, r := range app.graphWindowSizeRects {
 				if pointIn(r, x, y) {
 					app.settings.GraphWindowSize = i

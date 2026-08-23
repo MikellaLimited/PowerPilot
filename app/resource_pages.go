@@ -418,7 +418,7 @@ func drawAdvancedResourceMonitor(hdc uintptr, body RECT, w int) {
 		drawText(hdc, processPercentText(p.GPUPercent), int(cols[2].Left), int(r.Top), int(cols[2].Right-cols[2].Left)-4, int(r.Bottom-r.Top), 9, 600, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 		drawText(hdc, formatRAMMB(p.RAMMB), int(cols[3].Left), int(r.Top), int(cols[3].Right-cols[3].Left)-4, int(r.Bottom-r.Top), 9, 600, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 		drawText(hdc, formatRateValueKB(p.ReadKBps+p.WriteKBps), int(cols[4].Left), int(r.Top), int(cols[4].Right-cols[4].Left)-4, int(r.Bottom-r.Top), 9, 600, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		drawText(hdc, formatRateValueKB(p.OtherKBps), int(cols[5].Left), int(r.Top), int(cols[5].Right-cols[5].Left)-4, int(r.Bottom-r.Top), 9, 600, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		drawText(hdc, formatNetworkRateKB(p.OtherKBps), int(cols[5].Left), int(r.Top), int(cols[5].Right-cols[5].Left)-4, int(r.Bottom-r.Top), 9, 600, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	}
 	if ui2d.active {
 		d2dPopClip()
@@ -906,7 +906,7 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 					r := RECT{int32(left), int32(y), int32(right - 10), int32(y + 34)}
 					roundFill(hdc, r, surfaceButtonColor(), 8)
 					disk := a.ReadKBps + a.WriteKBps
-					vals := []string{a.Name, fmt.Sprintf("%.1f%%", a.CPU), fmt.Sprintf("%.1f%%", a.GPU), formatRAMMB(a.RAMMB), formatRateValueKB(disk), formatRateValueKB(a.NetworkKBps)}
+					vals := []string{a.Name, fmt.Sprintf("%.1f%%", a.CPU), fmt.Sprintf("%.1f%%", a.GPU), formatRAMMB(a.RAMMB), formatRateValueKB(disk), formatNetworkRateKB(a.NetworkKBps)}
 					for i, v := range vals {
 						flags := uint32(DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS)
 						col := theme.muted
@@ -1001,8 +1001,8 @@ func drawResourceStatistics(hdc uintptr, body RECT, w int) {
 		avg := fmt.Sprintf("%.1f%%", v.avg)
 		mx := fmt.Sprintf("макс %.0f%%", v.max)
 		if v.net {
-			avg = formatRateValueKB(v.avg)
-			mx = "макс " + formatRateValueKB(v.max)
+			avg = formatNetworkRateKB(v.avg)
+			mx = "макс " + formatNetworkRateKB(v.max)
 		}
 		drawText(hdc, avg, x+10, y+22, cardW-20, 22, 15, 700, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 		drawText(hdc, mx, x+10, y+45, cardW-20, 14, 8, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
@@ -1032,7 +1032,11 @@ func drawStatsByHourGraph(hdc uintptr, r RECT, samples []ResourceStatSample, mod
 		b[h].network += s.NetworkKBps
 		b[h].n++
 	}
-	plot := RECT{r.Left + 50, r.Top + 26, r.Right - 12, r.Bottom - 28}
+	axisLabelW := int32(42)
+	if mode == 5 {
+		axisLabelW = 64
+	}
+	plot := RECT{r.Left + axisLabelW + 8, r.Top + 26, r.Right - 12, r.Bottom - 28}
 	yMax := 100.0
 	if mode == 5 {
 		yMax = 1
@@ -1048,9 +1052,9 @@ func drawStatsByHourGraph(hdc uintptr, r RECT, samples []ResourceStatSample, mod
 		value := yMax * (1 - float64(k)/4)
 		label := fmt.Sprintf("%.0f%%", value)
 		if mode == 5 {
-			label = formatRateValueKB(value)
+			label = formatNetworkRateKB(value)
 		}
-		drawText(hdc, label, int(r.Left)+4, int(yy)-8, 42, 16, 8, 400, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, label, int(r.Left)+4, int(yy)-8, int(axisLabelW), 16, 8, 400, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 	}
 	cols := []uint32{theme.accent, rgb(235, 145, 72), theme.success, theme.accent2, theme.accent}
 	seriesIndices := []int{0, 1, 2, 3}
@@ -1143,7 +1147,11 @@ func drawStatsHistoryGraph(hdc uintptr, r RECT, samples []ResourceStatSample, mo
 		drawText(hdc, "История появится после накопления измерений.", int(r.Left)+12, int(r.Top), int(r.Right-r.Left)-24, int(r.Bottom-r.Top), 10, 400, theme.muted, DT_CENTER|DT_VCENTER)
 		return
 	}
-	plot := RECT{r.Left + 50, r.Top + 20, r.Right - 10, r.Bottom - 30}
+	axisLabelW := int32(42)
+	if mode == 5 {
+		axisLabelW = 64
+	}
+	plot := RECT{r.Left + axisLabelW + 8, r.Top + 20, r.Right - 10, r.Bottom - 30}
 	for k := 1; k <= 3; k++ {
 		yy := float32(plot.Top) + float32(plot.Bottom-plot.Top)*float32(k)/4
 		d2dDrawLine(float32(plot.Left), yy, float32(plot.Right), yy, .45, blendColor(theme.border, theme.muted, .18))
@@ -1192,9 +1200,9 @@ func drawStatsHistoryGraph(hdc uintptr, r RECT, samples []ResourceStatSample, mo
 		value := axisMax * (1 - float64(k)/4)
 		label := fmt.Sprintf("%.0f%%", value)
 		if mode == 5 {
-			label = formatRateValueKB(value)
+			label = formatNetworkRateKB(value)
 		}
-		drawText(hdc, label, int(r.Left)+4, int(yy)-8, 42, 16, 8, 400, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, label, int(r.Left)+4, int(yy)-8, int(axisLabelW), 16, 8, 400, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 	}
 	startAt, endAt := samples[0].At, samples[len(samples)-1].At
 	span := endAt.Sub(startAt)
@@ -1243,6 +1251,6 @@ func drawStatsHistoryGraph(hdc uintptr, r RECT, samples []ResourceStatSample, mo
 	}
 	if mode == 5 {
 		mx := series[0].max
-		drawText(hdc, "шкала до "+formatRateValueKB(mx), int(r.Right)-150, int(r.Top)+3, 138, 14, 8, 400, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "шкала до "+formatNetworkRateKB(mx), int(r.Right)-170, int(r.Top)+3, 158, 14, 8, 400, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 	}
 }

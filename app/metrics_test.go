@@ -59,3 +59,25 @@ func TestUsableNetworkInterfaceRejectsDuplicateSources(t *testing.T) {
 		t.Fatal("disconnected interface was accepted")
 	}
 }
+
+func TestFormatNetworkRateUnits(t *testing.T) {
+	tests := []struct {
+		kb   float64
+		bits bool
+		want string
+	}{
+		{0.5, false, "512 Б/с"},
+		{1, false, "1 КБ/с"},
+		{1024, false, "1.0 МБ/с"},
+		{1024 * 1024, false, "1.0 ГБ/с"},
+		{1, true, "8 Кбит/с"},
+		{1024, true, "8.4 Мбит/с"},
+		{1024 * 1024, true, "8.6 Гбит/с"},
+		{-1, true, "—"},
+	}
+	for _, tt := range tests {
+		if got := formatNetworkRateKBWithUnit(tt.kb, tt.bits); got != tt.want {
+			t.Errorf("formatNetworkRateKBWithUnit(%v, %v) = %q, want %q", tt.kb, tt.bits, got, tt.want)
+		}
+	}
+}
