@@ -8,6 +8,7 @@ import (
 	_ "image/png"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeMiniLayoutMigratesLegacyMetrics(t *testing.T) {
@@ -83,5 +84,30 @@ func TestMiniMetricsWrapIntoTwoCompleteLines(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("wrapped metrics lost %q: %q", want, joined)
 		}
+	}
+}
+
+func TestActiveSchedulePauseFreezesTimerTarget(t *testing.T) {
+	oldSchedule := app.schedule
+	oldStatus := app.status
+	t.Cleanup(func() {
+		app.schedule = oldSchedule
+		app.status = oldStatus
+	})
+	now := time.Now()
+	app.schedule = Schedule{active: true, mode: 0, runID: "pause-test", started: now, target: now.Add(time.Minute)}
+	originalTarget := app.schedule.target
+
+	toggleActiveSchedulePaused()
+	if !app.schedule.paused {
+		t.Fatal("schedule did not enter paused state")
+	}
+	time.Sleep(5 * time.Millisecond)
+	toggleActiveSchedulePaused()
+	if app.schedule.paused {
+		t.Fatal("schedule did not resume")
+	}
+	if !app.schedule.target.After(originalTarget) {
+		t.Fatal("timer target was not shifted by the paused duration")
 	}
 }

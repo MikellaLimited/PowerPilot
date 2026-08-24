@@ -796,6 +796,9 @@ func executeScenarioGraphWithStepRunner(s Schedule, runSteps func(Schedule) bool
 	signals := map[string]bool{}
 	resultAction, finished := s.action, false
 	for _, id := range topo {
+		if s.runID != "" && !waitForScheduleResume(s.runID) {
+			return resultAction, false
+		}
 		node := nodes[id]
 		inputs := make([]bool, 0, len(incoming[id]))
 		for _, from := range incoming[id] {
@@ -831,7 +834,12 @@ func executeScenarioGraphWithStepRunner(s Schedule, runSteps func(Schedule) bool
 			appendRunHistory("GRAPH_ACTION", fmt.Sprintf("%s · результат=%t", graphNodeSummary(*node), signals[id]), s.runID)
 		case graphNodeWait:
 			if inputAny {
-				time.Sleep(time.Duration(max(node.WaitSecs, 1)) * time.Second)
+				wait := time.Duration(max(node.WaitSecs, 1)) * time.Second
+				if s.runID == "" {
+					time.Sleep(wait)
+				} else if !sleepScheduleAware(s.runID, wait) {
+					return resultAction, false
+				}
 			}
 			signals[id] = inputAny
 		case graphNodeFinish:

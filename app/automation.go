@@ -869,6 +869,9 @@ func executeScenarioSteps(s Schedule) bool {
 		if s.runID != "" && !scheduleRunIsCurrent(s.runID) {
 			return false
 		}
+		if s.runID != "" && !waitForScheduleResume(s.runID) {
+			return false
+		}
 		execVisualStep040(idx)
 		attempts := 1
 		if step.OnError == 2 {
@@ -893,7 +896,12 @@ func executeScenarioSteps(s Schedule) bool {
 		}
 		if step.DelayAfter > 0 {
 			appendRunHistory("STEP", fmt.Sprintf("Пауза после шага %d: %d сек", idx+1, step.DelayAfter), s.runID)
-			time.Sleep(time.Duration(step.DelayAfter) * time.Second)
+			wait := time.Duration(step.DelayAfter) * time.Second
+			if s.runID == "" {
+				time.Sleep(wait)
+			} else if !sleepScheduleAware(s.runID, wait) {
+				return false
+			}
 			if s.runID != "" && !scheduleRunIsCurrent(s.runID) {
 				return false
 			}
@@ -915,7 +923,12 @@ func executeOneScenarioStep(step ActionStep, s Schedule) error {
 			return fmt.Errorf("не закрыты: %s", strings.Join(failed, ", "))
 		}
 	case stepWait:
-		time.Sleep(time.Duration(max(step.Value, 1)) * time.Second)
+		wait := time.Duration(max(step.Value, 1)) * time.Second
+		if s.runID == "" {
+			time.Sleep(wait)
+		} else if !sleepScheduleAware(s.runID, wait) {
+			return fmt.Errorf("задача отменена во время ожидания")
+		}
 	case stepRunCommand:
 		cmdLine := strings.TrimSpace(step.Text)
 		if cmdLine == "" {

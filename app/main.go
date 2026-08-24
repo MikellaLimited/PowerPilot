@@ -611,6 +611,8 @@ type ProcessInfo struct {
 type Schedule struct {
 	active           bool
 	executing        bool
+	paused           bool
+	pausedAt         time.Time
 	action           int
 	mode             int
 	target           time.Time
@@ -3812,8 +3814,12 @@ func drawMiniMode(hdc uintptr, rc RECT) {
 			roundFill(hdc, RECT{bar.Left, bar.Top, bar.Left + bw, bar.Bottom}, theme.accent, 3)
 		}
 	}
-	drawButton(hdc, app.miniCancelRect, "Отменить", false)
-	drawButton(hdc, app.miniPostponeRect, "+10 минут", true)
+	pauseLabel := "Пауза"
+	if app.schedule.paused {
+		pauseLabel = "Продолжить"
+	}
+	drawButton(hdc, app.miniCancelRect, pauseLabel, true)
+	drawButton(hdc, app.miniPostponeRect, "Отменить", false)
 }
 
 func miniTaskName() string {
@@ -7506,10 +7512,10 @@ func onClick(x, y int32) {
 	if app.miniMode {
 		if pointIn(app.miniCancelRect, x, y) {
 			playUI(clickSound)
-			cancelSchedule(true)
+			toggleActiveSchedulePaused()
 		} else if pointIn(app.miniPostponeRect, x, y) {
 			playUI(clickSound)
-			postpone10()
+			cancelSchedule(true)
 		}
 		return
 	}
@@ -10891,6 +10897,87 @@ func cancelSchedule(log bool) {
 	}
 	invalidate(app.hwnd)
 }
+
+func toggleActiveSchedulePaused() {
+	app.mu.Lock()
+	if !app.schedule.active {
+		app.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	if app.schedule.paused {
+		pausedFor := now.Sub(app.schedule.pausedAt)
+		if pausedFor > 0 && (app.schedule.mode == 0 || app.schedule.mode == 1 || app.schedule.mode == 4) {
+			app.schedule.target = app.schedule.target.Add(pausedFor)
+			app.schedule.started = app.schedule.started.Add(pausedFor)
+		}
+		app.schedule.paused = false
+		app.schedule.pausedAt = time.Time{}
+		app.status = "Задача продолжена"
+	} else {
+		app.schedule.paused = true
+		app.schedule.pausedAt = now
+		app.status = "Задача приостановлена"
+	}
+	paused := app.schedule.paused
+	runID := app.schedule.runID
+	app.mu.Unlock()
+	if !paused {
+		resetConditionRuntimes()
+	}
+	state := "Продолжена"
+	if paused {
+		state = "Приостановлена"
+	}
+	appendRunHistory("PAUSE", state+" пользователем", runID)
+	invalidate(app.hwnd)
+}
+
+func schedulePauseState(runID string) (active, paused bool) {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	return app.schedule.active && app.schedule.runID == runID, app.schedule.paused
+}
+
+func waitForScheduleResume(runID string) bool {
+	for {
+		active, paused := schedulePauseState(runID)
+		if !active {
+			return false
+		}
+		if !paused {
+			return true
+		}
+		time.Sleep(80 * time.Millisecond)
+	}
+}
+
+func sleepScheduleAware(runID string, duration time.Duration) bool {
+	remaining := duration
+	for remaining > 0 {
+		if !waitForScheduleResume(runID) {
+			return false
+		}
+		slice := minDuration(remaining, 100*time.Millisecond)
+		started := time.Now()
+		time.Sleep(slice)
+		active, paused := schedulePauseState(runID)
+		if !active {
+			return false
+		}
+		if !paused {
+			remaining -= time.Since(started)
+		}
+	}
+	return true
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
 func postpone10() {
 	if !app.schedule.active {
 		return
@@ -10925,6 +11012,9 @@ func tick() {
 		}
 	}
 	if !app.schedule.active {
+		return
+	}
+	if app.schedule.paused {
 		return
 	}
 	if app.schedule.executing {
