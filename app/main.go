@@ -2266,9 +2266,12 @@ func layoutControlsLogical(rc RECT) {
 			app.graphSettingsSnapRect = RECT{int32(innerLeft), int32(contentY + 86), int32(innerLeft + 28), int32(contentY + 114)}
 			app.graphSettingsErrorRect = RECT{int32(innerLeft), int32(contentY + 154), int32(innerLeft + 28), int32(contentY + 182)}
 		case 9:
-			app.miniPreviewRect = RECT{int32(innerLeft), int32(contentY + 14), int32(settingsRight), int32(contentY + 126)}
-			app.miniDetailedTopRect = RECT{int32(innerLeft), int32(contentY + 152), int32(innerLeft + 28), int32(contentY + 180)}
-			optionY := contentY + 218
+			previewTop := contentY + 14
+			previewBottom := previewTop + 150
+			app.miniPreviewRect = RECT{int32(innerLeft), int32(previewTop), int32(settingsRight), int32(previewBottom)}
+			topToggleY := previewBottom + 26
+			app.miniDetailedTopRect = RECT{int32(innerLeft), int32(topToggleY), int32(innerLeft + 28), int32(topToggleY + 28)}
+			optionY := topToggleY + 66
 			optionGap := 8
 			optionW := (settingsContentW - optionGap) / 2
 			for i := range app.miniDetailedOptionRects {
@@ -3042,7 +3045,7 @@ func settingsVirtualContentHeight() int {
 	case 8:
 		return 230
 	case 9:
-		return 590
+		return 640
 	}
 	return 0
 }
