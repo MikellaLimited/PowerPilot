@@ -1202,6 +1202,7 @@ func main() {
 	}
 	if !existed {
 		app.settings.IdleSecondsMigrated = true
+		app.settings.AutoStart = true
 		app.settings.MinimizeToTray = true
 		app.settings.CloseBefore = true
 		app.settings.Sounds = true
@@ -1215,6 +1216,9 @@ func main() {
 		app.settings.TemperatureAutoUpdate = true
 	}
 	normalizeSettings()
+	if err := setAutoStart(app.settings.AutoStart); err != nil {
+		techLog040("autostart registration failed: " + err.Error())
+	}
 	normalizeV040Settings()
 	startupRecovery040()
 	normalizeSettings()
@@ -8189,7 +8193,9 @@ func onClick(x, y int32) {
 			}
 			if pointIn(app.autoRect, x, y) {
 				app.settings.AutoStart = !app.settings.AutoStart
-				setAutoStart(app.settings.AutoStart)
+				if err := setAutoStart(app.settings.AutoStart); err != nil {
+					techLog040("autostart registration failed: " + err.Error())
+				}
 				saveSettings()
 				playUI(clickSound)
 				invalidate(app.hwnd)
@@ -11704,14 +11710,21 @@ func appendHistory(kind, detail string) {
 	}
 }
 
-func setAutoStart(enabled bool) {
-	exe, _ := os.Executable()
+func setAutoStart(enabled bool) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve PowerPilot executable for autostart: %w", err)
+	}
 	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
 	if enabled {
-		exec.Command("reg.exe", "add", key, "/v", "PowerPilot", "/t", "REG_SZ", "/d", `"`+exe+`"`, `/f`).Run()
-	} else {
-		exec.Command("reg.exe", "delete", key, "/v", "PowerPilot", "/f").Run()
+		if err := exec.Command("reg.exe", "add", key, "/v", "PowerPilot", "/t", "REG_SZ", "/d", `"`+exe+`"`, `/f`).Run(); err != nil {
+			return fmt.Errorf("register PowerPilot autostart: %w", err)
+		}
+		return nil
 	}
+	// Deleting an already absent value is the desired disabled state.
+	_ = exec.Command("reg.exe", "delete", key, "/v", "PowerPilot", "/f").Run()
+	return nil
 }
 
 func splitExactParts(value string) [5]string {
