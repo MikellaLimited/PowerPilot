@@ -27,7 +27,7 @@ const appVersion = "0.8.3"
 const normalMinClientW = 640
 const normalMinClientH = 650
 const miniClientW = 500
-const miniClientH = 196
+const miniClientH = 218
 
 //go:embed assets/click.wav
 var clickSound []byte
@@ -3824,21 +3824,30 @@ func drawMiniDashboardContent(hdc uintptr, card RECT, previewTitle bool) {
 	}
 	if app.settings.MiniShowCountdown {
 		drawText(hdc, app.countdownOrDefault(), contentLeft, leftY, columnW, scaled(31), scaled(22), 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		leftY += scaled(31)
 	}
 
 	current, next := miniStepSummaries()
-	rightY := contentTop
 	if app.settings.MiniShowStep {
-		drawText(hdc, "Сейчас · "+current, rightX, rightY, columnW, scaled(16), scaled(10), 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		rightY += scaled(16)
+		drawText(hdc, "Сейчас · "+current, contentLeft, leftY, columnW, scaled(16), scaled(10), 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		leftY += scaled(16)
 	}
 	if app.settings.MiniShowNextStep {
-		drawText(hdc, "Далее · "+next, rightX, rightY, columnW, scaled(16), scaled(10), 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		rightY += scaled(16)
+		drawText(hdc, "Далее · "+next, contentLeft, leftY, columnW, scaled(16), scaled(10), 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		leftY += scaled(16)
 	}
-	for _, metric := range miniMetricsLines(metricsSnapshot()) {
-		drawText(hdc, metric, rightX, rightY, columnW, scaled(14), scaled(9), 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		rightY += scaled(14)
+
+	metrics := miniMetricParts(metricsSnapshot())
+	metricGap := scaled(5)
+	metricH := scaled(22)
+	metricW := (columnW - metricGap) / 2
+	for i, metric := range metrics {
+		row, col := i/2, i%2
+		x := rightX + col*(metricW+metricGap)
+		y := contentTop + row*(metricH+metricGap)
+		panel := RECT{int32(x), int32(y), int32(x + metricW), int32(y + metricH)}
+		roundFill(hdc, panel, blendColor(surfacePanelColor(), surfaceButtonColor(), .42), int32(scaled(6)))
+		drawText(hdc, metric, x+scaled(5), y, metricW-scaled(10), metricH, scaled(9), 550, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	}
 
 	if app.settings.MiniShowProgress {
