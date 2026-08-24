@@ -339,8 +339,8 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	roundFill(hdc, canvas, blendColor(theme.bg, surfacePanelColor(), .36), 14)
 	if ui2d.active {
 		d2dPushClip(canvas)
-		minorStep := int32(max(10, int(24*g.Zoom)))
-		majorStep := minorStep * 4
+		minorStep := int32(max(6, int(math.Round(24*g.Zoom))))
+		majorStep := int32(max(18, int(math.Round(96*g.Zoom))))
 		minor := blendColor(theme.border, theme.muted, .20)
 		major := blendColor(theme.border, theme.accent2, .28)
 		drawGrid := func(step int32, color uint32, stroke float32) {
@@ -353,7 +353,13 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 				d2dDrawLine(float32(canvas.Left), float32(y), float32(canvas.Right), float32(y), stroke, color)
 			}
 		}
-		drawGrid(minorStep, minor, .45)
+		// The subdivision grid is visual detail, not permanent noise. Fade it in
+		// between 72% and 110% zoom while the coarse grid remains stable.
+		minorAlpha := clampFloat((g.Zoom-.72)/(1.10-.72), 0, 1)
+		minorAlpha = minorAlpha * minorAlpha * (3 - 2*minorAlpha)
+		if minorAlpha > .01 {
+			drawGrid(minorStep, blendColor(surfacePanelColor(), minor, minorAlpha), float32(.30+.15*minorAlpha))
+		}
 		drawGrid(majorStep, major, .8)
 		if app.graphMarquee {
 			marquee := graphRectNormalized(app.graphMarqueeStartX, app.graphMarqueeStartY, app.graphMarqueeX, app.graphMarqueeY)
@@ -791,13 +797,71 @@ func connectGraphWireToEdge(g *ScenarioGraph, edgeID, from, port string, x, y in
 		oldTo := edge.To
 		g.Edges = append(g.Edges[:i], g.Edges[i+1:]...)
 		g.Nodes = append(g.Nodes, junction)
-		g.connect(edge.From, graphPortNext, junction.ID)
+		g.connect(edge.From, edge.FromPort, junction.ID)
 		g.connect(from, port, junction.ID)
 		g.connect(junction.ID, graphPortNext, oldTo)
 		selectOnlyGraphNode(junction.ID)
 		return true
 	}
 	return false
+}
+
+// connectGraphWireToInput keeps a regular block input visually unambiguous.
+// A second incoming wire is represented by a real junction immediately before
+// the input instead of two unrelated lines disappearing into the same socket.
+func connectGraphWireToInput(g *ScenarioGraph, from, port, to string) bool {
+	if g == nil || from == "" || to == "" || from == to {
+		return false
+	}
+	target := g.node(to)
+	if target == nil {
+		return false
+	}
+	for _, edge := range g.Edges {
+		if edge.From == from && edge.FromPort == port && edge.To == to {
+			return false
+		}
+	}
+	if target.Kind == graphNodeLogic || target.Kind == graphNodeJunction {
+		before := len(g.Edges)
+		g.connect(from, port, to)
+		return len(g.Edges) != before
+	}
+	incoming := []ScenarioGraphEdge{}
+	for _, edge := range g.Edges {
+		if edge.To == to {
+			incoming = append(incoming, edge)
+		}
+	}
+	if len(incoming) == 0 {
+		before := len(g.Edges)
+		g.connect(from, port, to)
+		return len(g.Edges) != before
+	}
+	// Reuse the junction already feeding this input.
+	if len(incoming) == 1 {
+		if source := g.node(incoming[0].From); source != nil && source.Kind == graphNodeJunction {
+			before := len(g.Edges)
+			g.connect(from, port, source.ID)
+			return len(g.Edges) != before
+		}
+	}
+	junction := newScenarioGraphNode(graphNodeJunction, target.X-72, target.Y+29)
+	kept := g.Edges[:0]
+	for _, edge := range g.Edges {
+		if edge.To != to {
+			kept = append(kept, edge)
+		}
+	}
+	g.Edges = kept
+	g.Nodes = append(g.Nodes, junction)
+	for _, edge := range incoming {
+		g.connect(edge.From, edge.FromPort, junction.ID)
+	}
+	g.connect(from, port, junction.ID)
+	g.connect(junction.ID, graphPortNext, to)
+	selectOnlyGraphNode(junction.ID)
+	return true
 }
 
 func fitScenarioGraph() {
@@ -925,7 +989,7 @@ func handleScenarioGraphClick(x, y int32) bool {
 		}
 		if p.Input {
 			if app.graphConnectingNodeID != "" {
-				g.connect(app.graphConnectingNodeID, app.graphConnectingPort, p.NodeID)
+				connectGraphWireToInput(g, app.graphConnectingNodeID, app.graphConnectingPort, p.NodeID)
 				app.graphConnectingNodeID, app.graphConnectingPort = "", ""
 				persistCurrentScenarioGraph()
 				playUI(successSound)
@@ -1022,7 +1086,13 @@ func finishScenarioGraphPointer() bool {
 		for _, id := range selectedGraphNodeIDs() {
 			if n := ensureCurrentScenarioGraph().node(id); n != nil {
 				n.X = math.Round(n.X/step) * step
-				n.Y = math.Round(n.Y/step) * step
+				if n.Kind == graphNodeLogic || n.Kind == graphNodeJunction {
+					// Logical nodes connect at their centre (19 world units from top).
+					// Snap that port, not the outer circle, to the same wire grid.
+					n.Y = math.Round((n.Y+19)/step)*step - 19
+				} else {
+					n.Y = math.Round(n.Y/step) * step
+				}
 			}
 		}
 	}

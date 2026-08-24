@@ -599,6 +599,7 @@ type ProcessInfo struct {
 
 type Schedule struct {
 	active           bool
+	executing        bool
 	action           int
 	mode             int
 	target           time.Time
@@ -1361,6 +1362,17 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	case WM_NCHITTEST:
 		return hitTestWindow(hwnd, lParam)
 	case WM_PAINT:
+		// A detached editor temporarily swaps its window-owned UI state into app.
+		// Win32 may synchronously ask the main window to paint during that swap
+		// (for example while moving the editor). Painting then would render editor
+		// geometry into the main window and make controls appear to vanish.
+		if activeScenarioGraphSession != nil && hwnd == app.hwnd {
+			var ps PAINTSTRUCT
+			pBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+			pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+			mainPaintDeferredByGraphSession = true
+			return 0
+		}
 		paint(hwnd)
 		return 0
 	case WM_ERASEBKGND:
@@ -6223,7 +6235,7 @@ func beginScrollbarInteraction(x, y int32) bool {
 	if pointIn(thumb, x, y) {
 		app.draggingScrollKind = kind
 		app.dragScrollGrabOffset = float64(y - thumb.Top)
-		pSetCapture.Call(app.hwnd)
+		pSetCapture.Call(activeInteractionWindow())
 		return true
 	}
 	// Track click recenters the thumb and then smoothly glides there.
@@ -6310,7 +6322,14 @@ func dragScrollbarTo(y int32) {
 		app.resourceStatsListScrollPx = app.resourceStatsListScrollTarget
 	}
 	updateScrollGeometry()
-	invalidate(app.hwnd)
+	invalidate(activeInteractionWindow())
+}
+
+func activeInteractionWindow() uintptr {
+	if session := currentScenarioGraphSession(); session != nil && session.HWND != 0 {
+		return session.HWND
+	}
+	return app.hwnd
 }
 
 func updateScrollGeometry() {
@@ -10740,6 +10759,9 @@ func tick() {
 	if !app.schedule.active {
 		return
 	}
+	if app.schedule.executing {
+		return
+	}
 	baseReady := false
 	switch app.schedule.mode {
 	case 0, 1, 4:
@@ -10840,10 +10862,10 @@ func tick() {
 }
 
 func executeActionAsync(s Schedule) {
-	if !app.schedule.active {
+	if !app.schedule.active || app.schedule.executing {
 		return
 	}
-	app.schedule.active = false
+	app.schedule.executing = true
 	app.status = "Выполняю сценарий…"
 	execVisualStart040()
 	invalidate(app.hwnd)
@@ -10855,9 +10877,17 @@ func executeActionAsync(s Schedule) {
 		} else {
 			ok = executeScenarioSteps(s)
 		}
+		// Cancellation replaces the active schedule. Do not let the old worker
+		// update UI, notify, or perform the final power action afterwards.
+		if !scheduleRunIsCurrent(s.runID) {
+			execVisualFinal040("ok")
+			return
+		}
 		if !ok {
 			execVisualFinal040("error")
 			app.mu.Lock()
+			app.schedule.active = false
+			app.schedule.executing = false
 			app.status = "Сценарий остановлен из-за ошибки"
 			app.countdown = "00:00:00"
 			app.progress = 0
@@ -10892,6 +10922,8 @@ func executeActionAsync(s Schedule) {
 		}
 		execVisualFinal040("ok")
 		app.mu.Lock()
+		app.schedule.active = false
+		app.schedule.executing = false
 		if finalAction == 4 {
 			app.status = "Задача завершена"
 		} else {
@@ -10902,6 +10934,12 @@ func executeActionAsync(s Schedule) {
 		app.mu.Unlock()
 		invalidate(app.hwnd)
 	}()
+}
+
+func scheduleRunIsCurrent(runID string) bool {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	return runID != "" && app.schedule.active && app.schedule.runID == runID
 }
 
 func powerActionName(a int) string {

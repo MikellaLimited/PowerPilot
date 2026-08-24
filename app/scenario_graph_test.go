@@ -197,6 +197,64 @@ func TestPruneSingleInputJunctionReconnectsWire(t *testing.T) {
 	}
 }
 
+func TestSecondWireToRegularInputCreatesJunction(t *testing.T) {
+	first := newScenarioGraphNode(graphNodeTrigger, 0, 0)
+	second := newScenarioGraphNode(graphNodeTrigger, 0, 120)
+	target := newScenarioGraphNode(graphNodeAction, 300, 0)
+	g := ScenarioGraph{Version: scenarioGraphVersion, Zoom: 1, Nodes: []ScenarioGraphNode{first, second, target}}
+	if !connectGraphWireToInput(&g, first.ID, graphPortNext, target.ID) {
+		t.Fatal("first wire was not connected")
+	}
+	if !connectGraphWireToInput(&g, second.ID, graphPortNext, target.ID) {
+		t.Fatal("second wire was not connected")
+	}
+	junctions := 0
+	junctionID := ""
+	for _, node := range g.Nodes {
+		if node.Kind == graphNodeJunction {
+			junctions++
+			junctionID = node.ID
+			if math.Mod(node.Y+19, 24) != 0 {
+				t.Fatalf("junction port is not aligned to the wire grid: y=%v", node.Y)
+			}
+		}
+	}
+	if junctions != 1 {
+		t.Fatalf("expected one visible junction, got %d", junctions)
+	}
+	incoming, outgoing := 0, 0
+	for _, edge := range g.Edges {
+		if edge.To == junctionID {
+			incoming++
+		}
+		if edge.From == junctionID && edge.To == target.ID {
+			outgoing++
+		}
+		if edge.To == target.ID && edge.From != junctionID {
+			t.Fatalf("regular input still has a hidden direct wire: %#v", edge)
+		}
+	}
+	if incoming != 2 || outgoing != 1 {
+		t.Fatalf("wrong junction topology: incoming=%d outgoing=%d graph=%#v", incoming, outgoing, g)
+	}
+}
+
+func TestNotRequiresExactlyOneInput(t *testing.T) {
+	first := newScenarioGraphNode(graphNodeTrigger, 0, 0)
+	second := newScenarioGraphNode(graphNodeTrigger, 0, 120)
+	not := newScenarioGraphNode(graphNodeLogic, 240, 0)
+	not.LogicOp = graphLogicNOT
+	finish := newScenarioGraphNode(graphNodeFinish, 480, 0)
+	finish.Action = 4
+	g := ScenarioGraph{Version: scenarioGraphVersion, Zoom: 1, Nodes: []ScenarioGraphNode{first, second, not, finish}}
+	g.connect(first.ID, graphPortNext, not.ID)
+	g.connect(second.ID, graphPortNext, not.ID)
+	g.connect(not.ID, graphPortNext, finish.ID)
+	if scenarioGraphValidationError(g) == "" {
+		t.Fatal("NOT with two inputs must be rejected instead of silently ignoring one")
+	}
+}
+
 func TestEmptyConditionGroupDoesNotBlockActions(t *testing.T) {
 	t.Setenv("APPDATA", t.TempDir())
 	trigger := newScenarioGraphNode(graphNodeTrigger, 0, 0)

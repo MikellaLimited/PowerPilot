@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 // AutomationCondition types.
@@ -854,6 +855,9 @@ func pathSize(path string) (int64, bool) {
 }
 
 func executeScenarioSteps(s Schedule) bool {
+	if s.runID != "" && !scheduleRunIsCurrent(s.runID) {
+		return false
+	}
 	if s.closeBefore {
 		for _, p := range s.processes {
 			if !closeProcess(p, 8*time.Second) {
@@ -862,6 +866,9 @@ func executeScenarioSteps(s Schedule) bool {
 		}
 	}
 	for idx, step := range s.steps {
+		if s.runID != "" && !scheduleRunIsCurrent(s.runID) {
+			return false
+		}
 		execVisualStep040(idx)
 		attempts := 1
 		if step.OnError == 2 {
@@ -887,6 +894,9 @@ func executeScenarioSteps(s Schedule) bool {
 		if step.DelayAfter > 0 {
 			appendRunHistory("STEP", fmt.Sprintf("Пауза после шага %d: %d сек", idx+1, step.DelayAfter), s.runID)
 			time.Sleep(time.Duration(step.DelayAfter) * time.Second)
+			if s.runID != "" && !scheduleRunIsCurrent(s.runID) {
+				return false
+			}
 		}
 	}
 	return true
@@ -911,7 +921,30 @@ func executeOneScenarioStep(step ActionStep, s Schedule) error {
 		if cmdLine == "" {
 			return fmt.Errorf("команда не задана")
 		}
-		c := exec.Command("cmd.exe", "/C", cmdLine)
+		literalPath := cmdLine
+		if len(literalPath) >= 2 && literalPath[0] == '"' && literalPath[len(literalPath)-1] == '"' {
+			literalPath = literalPath[1 : len(literalPath)-1]
+		}
+		var c *exec.Cmd
+		// The file picker stores a literal path. Passing that path through cmd.exe
+		// breaks on spaces and shell metacharacters, so launch real executables
+		// directly. Free-form commands still use the command processor.
+		if info, statErr := os.Stat(literalPath); statErr == nil && !info.IsDir() &&
+			(strings.EqualFold(filepath.Ext(literalPath), ".exe") || strings.EqualFold(filepath.Ext(literalPath), ".com")) {
+			c = exec.Command(literalPath)
+		} else if statErr == nil && !info.IsDir() {
+			// Documents, shortcuts and scripts selected through the picker should
+			// use their normal Windows association instead of being parsed as an
+			// unquoted command line.
+			shellExecute := syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
+			result, _, callErr := shellExecute.Call(0, uintptr(unsafe.Pointer(wstr("open"))), uintptr(unsafe.Pointer(wstr(literalPath))), 0, 0, SW_SHOW)
+			if result <= 32 {
+				return fmt.Errorf("Windows не удалось открыть файл (ShellExecute=%d): %v", result, callErr)
+			}
+			return nil
+		} else {
+			c = exec.Command("cmd.exe", "/D", "/S", "/C", cmdLine)
+		}
 		c.SysProcAttr = hiddenProcAttr()
 		if err := c.Start(); err != nil {
 			return err

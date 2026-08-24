@@ -33,6 +33,7 @@ type scenarioGraphSession struct {
 
 var scenarioGraphSessions = map[uintptr]*scenarioGraphSession{}
 var activeScenarioGraphSession *scenarioGraphSession
+var mainPaintDeferredByGraphSession bool
 
 func graphSessionOwnsField(field reflect.StructField) bool {
 	name := field.Name
@@ -94,6 +95,10 @@ func withScenarioGraphSession(hwnd uintptr, fn func() uintptr) uintptr {
 	activeScenarioGraphSession = nil
 	graphEditorEdits = mainGraphEditorEdits
 	copyGraphSessionUI(&app, &mainUI)
+	if mainPaintDeferredByGraphSession && app.hwnd != 0 {
+		mainPaintDeferredByGraphSession = false
+		pInvalidateRect.Call(app.hwnd, 0, 0)
+	}
 	return result
 }
 

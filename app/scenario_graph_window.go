@@ -119,7 +119,9 @@ func openScenarioGraphWindow() {
 		return 0
 	})
 	app.graphWindow = hwnd
-	pSetTimer.Call(hwnd, scenarioGraphAnimationTimerID, 10, 0)
+	// 30 FPS is enough for the short panel/gear transitions and avoids swapping
+	// the detached session state one hundred times per second while idle.
+	pSetTimer.Call(hwnd, scenarioGraphAnimationTimerID, 33, 0)
 	app.graphTitleHover = -1
 	applyRoundedWindowCorners(hwnd)
 	if app.appIcon != 0 {
@@ -415,7 +417,15 @@ func scenarioGraphWindowProcActive(hwnd uintptr, msg uint32, wParam, lParam uint
 				app.graphTitleHover = i
 			}
 		}
-		handleScenarioGraphMouseMove(x, y)
+		if app.draggingScrollKind != 0 {
+			scrollY := y
+			if app.graphEditorOpen && app.graphEditorSection != 0 {
+				scrollY -= app.graphEditorDY
+			}
+			dragScrollbarTo(scrollY)
+		} else {
+			handleScenarioGraphMouseMove(x, y)
+		}
 		pInvalidateRect.Call(hwnd, 0, 0)
 		return 0
 	case WM_LBUTTONDOWN:
@@ -452,6 +462,10 @@ func scenarioGraphWindowProcActive(hwnd uintptr, msg uint32, wParam, lParam uint
 		return 0
 	case WM_LBUTTONUP:
 		finishScenarioGraphPointer()
+		if app.draggingScrollKind != 0 {
+			app.draggingScrollKind = 0
+			pReleaseCapture.Call()
+		}
 		pInvalidateRect.Call(hwnd, 0, 0)
 		return 0
 	case WM_RBUTTONDOWN:

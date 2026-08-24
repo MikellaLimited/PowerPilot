@@ -585,6 +585,9 @@ func validateScenarioGraph(g ScenarioGraph) []GraphValidationIssue {
 			if incoming[n.ID] < need {
 				issues = append(issues, GraphValidationIssue{1, n.ID, fmt.Sprintf("Логическому блоку нужно минимум %d входа", need)})
 			}
+			if n.LogicOp == graphLogicNOT && incoming[n.ID] > 1 {
+				issues = append(issues, GraphValidationIssue{2, n.ID, "Логический блок «НЕ» принимает ровно один вход"})
+			}
 		}
 	}
 	triggerIDs := []string{}
