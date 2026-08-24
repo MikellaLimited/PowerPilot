@@ -37,9 +37,9 @@ func advanceDetachedEditorScroll() bool {
 	if !app.graphEditorOpen || app.graphEditorSection != 4 || app.draggingScrollKind != 0 {
 		return false
 	}
-	step := .24
+	step := .55
 	if app.settings.AnimationMode == 1 {
-		step = .38
+		step = .72
 	}
 	if app.settings.AnimationMode == 2 {
 		step = 1
@@ -121,7 +121,7 @@ func openScenarioGraphWindow() {
 	app.graphWindow = hwnd
 	// 30 FPS is enough for the short panel/gear transitions and avoids swapping
 	// the detached session state one hundred times per second while idle.
-	pSetTimer.Call(hwnd, scenarioGraphAnimationTimerID, 33, 0)
+	pSetTimer.Call(hwnd, scenarioGraphAnimationTimerID, 20, 0)
 	app.graphTitleHover = -1
 	applyRoundedWindowCorners(hwnd)
 	if app.appIcon != 0 {

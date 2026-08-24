@@ -88,6 +88,9 @@ var captionExitMiniPNGData []byte
 //go:embed assets/caption-pin.png
 var captionPinPNGData []byte
 
+//go:embed assets/caption-unpin.png
+var captionUnpinPNGData []byte
+
 //go:embed assets/caption-restore.png
 var captionRestorePNGData []byte
 
@@ -558,6 +561,14 @@ type Settings struct {
 	MiniShowCountdown             bool                  `json:"mini_show_countdown"`
 	MiniShowStep                  bool                  `json:"mini_show_step"`
 	MiniShowMetrics               bool                  `json:"mini_show_metrics"`
+	MiniShowNextStep              bool                  `json:"mini_show_next_step,omitempty"`
+	MiniShowCPU                   bool                  `json:"mini_show_cpu,omitempty"`
+	MiniShowGPU                   bool                  `json:"mini_show_gpu,omitempty"`
+	MiniShowRAM                   bool                  `json:"mini_show_ram,omitempty"`
+	MiniShowNetwork               bool                  `json:"mini_show_network,omitempty"`
+	MiniShowDisk                  bool                  `json:"mini_show_disk,omitempty"`
+	MiniShowProgress              bool                  `json:"mini_show_progress,omitempty"`
+	MiniLayoutMigrated            bool                  `json:"mini_layout_migrated,omitempty"`
 	MiniSize                      int                   `json:"mini_size"`
 	UIScale                       int                   `json:"ui_scale"`
 	ResourceRefreshMS             int                   `json:"resource_refresh_ms"`
@@ -730,7 +741,7 @@ type App struct {
 	hotkeysRect                            RECT
 	settingsTabs                           [8]RECT
 	settingsCompactTabsRect                RECT
-	settingsSectionRects                   [2]RECT
+	settingsSectionRects                   [3]RECT
 	settingsCategory                       int
 	resourceTimelineModeRects              [2]RECT
 	resourceTimelineTicksTrackRect         RECT
@@ -990,6 +1001,9 @@ type App struct {
 	miniAlwaysTopRect                      RECT
 	miniOptionRects                        [4]RECT
 	miniSizeRects                          [3]RECT
+	miniDetailedOptionRects                [10]RECT
+	miniPreviewRect                        RECT
+	miniDetailedTopRect                    RECT
 	uiScaleRects                           [4]RECT
 	resourceCardRects                      [6]RECT
 	resourceRefreshRects                   [5]RECT
@@ -1955,8 +1969,12 @@ func layoutControlsLogical(rc RECT) {
 		}
 		if app.settingsCategory == 1 || app.settingsCategory == 5 {
 			sectionGap := 8
-			sectionW := (innerContentW - sectionGap) / 2
-			for i := range app.settingsSectionRects {
+			sectionCount := 2
+			if app.settingsCategory == 1 {
+				sectionCount = 3
+			}
+			sectionW := (innerContentW - sectionGap*(sectionCount-1)) / sectionCount
+			for i := 0; i < sectionCount; i++ {
 				x := innerLeft + i*(sectionW+sectionGap)
 				app.settingsSectionRects[i] = RECT{int32(x), int32(headerContentY), int32(x + sectionW), int32(headerContentY + 34)}
 			}
@@ -2248,6 +2266,25 @@ func layoutControlsLogical(rc RECT) {
 			app.graphSettingsToggleRect = RECT{int32(innerLeft), int32(contentY + 18), int32(innerLeft + 28), int32(contentY + 46)}
 			app.graphSettingsSnapRect = RECT{int32(innerLeft), int32(contentY + 86), int32(innerLeft + 28), int32(contentY + 114)}
 			app.graphSettingsErrorRect = RECT{int32(innerLeft), int32(contentY + 154), int32(innerLeft + 28), int32(contentY + 182)}
+		case 9:
+			app.miniPreviewRect = RECT{int32(innerLeft), int32(contentY + 14), int32(settingsRight), int32(contentY + 126)}
+			app.miniDetailedTopRect = RECT{int32(innerLeft), int32(contentY + 152), int32(innerLeft + 28), int32(contentY + 180)}
+			optionY := contentY + 218
+			optionGap := 8
+			optionW := (settingsContentW - optionGap) / 2
+			for i := range app.miniDetailedOptionRects {
+				row, col := i/2, i%2
+				x := innerLeft + col*(optionW+optionGap)
+				y := optionY + row*44
+				app.miniDetailedOptionRects[i] = RECT{int32(x), int32(y), int32(x + optionW), int32(y + 36)}
+			}
+			sizeY := optionY + 5*44 + 50
+			sizeGap := 8
+			sizeW := (settingsContentW - sizeGap*2) / 3
+			for i := range app.miniSizeRects {
+				x := innerLeft + i*(sizeW+sizeGap)
+				app.miniSizeRects[i] = RECT{int32(x), int32(sizeY), int32(x + sizeW), int32(sizeY + 38)}
+			}
 		}
 		for _, item := range []struct {
 			id int
@@ -3005,6 +3042,8 @@ func settingsVirtualContentHeight() int {
 		return 850
 	case 8:
 		return 230
+	case 9:
+		return 590
 	}
 	return 0
 }
@@ -3682,10 +3721,14 @@ func drawCaptionGlyph(hdc uintptr, kind int, r RECT) {
 	if ui2d.active {
 		// Keep the compact vector caption set; only the pin uses the supplied bitmap.
 		if kind == 0 && app.miniMode {
+			iconKind := 5
+			if app.settings.AlwaysOnTopMini {
+				iconKind = 7
+			}
 			size := int32(20)
 			x := r.Left + (r.Right-r.Left-size)/2
 			y := r.Top + (r.Bottom-r.Top-size)/2
-			if d2dDrawCaptionIcon(5, RECT{x, y, x + size, y + size}) {
+			if d2dDrawCaptionIcon(iconKind, RECT{x, y, x + size, y + size}) {
 				return
 			}
 		}
@@ -3742,36 +3785,25 @@ func drawMiniMode(hdc uintptr, rc RECT) {
 	leftW := max(160, minInt(260, (w-pad*2-18)/2))
 	rightX := pad + leftW + 18
 	if app.settings.MiniShowTask {
-		status := app.statusOrDefault()
-		if !app.schedule.active {
-			status = "Нет активной задачи"
-		}
-		drawText(hdc, status, pad, 51, leftW, 16, 10, 600, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		drawText(hdc, miniTaskName(), pad, 49, leftW, 17, 10, 650, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	}
 	if app.settings.MiniShowCountdown {
-		drawText(hdc, app.countdownOrDefault(), pad, 67, leftW, 32, 23, 500, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, app.countdownOrDefault(), pad, 65, leftW, 31, 23, 500, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	}
+	current, next := miniStepSummaries()
+	rightY := 49
 	if app.settings.MiniShowStep {
-		vs := getExecVisual040()
-		step := "Ожидание условия"
-		if vs.Running && vs.Current >= 0 {
-			steps := currentScenarioSteps()
-			if vs.Current < len(steps) {
-				step = stepSummary(steps[vs.Current])
-			}
-		} else if app.schedule.active {
-			step = "Задача активна"
-		} else {
-			step = "Нет активного шага"
-		}
-		drawText(hdc, "Шаг · "+step, rightX, 51, max(80, w-rightX-20), 18, 10, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		drawText(hdc, "Сейчас · "+current, rightX, rightY, max(80, w-rightX-20), 16, 9, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		rightY += 16
 	}
-	if app.settings.MiniShowMetrics {
-		m := metricsSnapshot()
-		metric := fmt.Sprintf("CPU %.0f%% · Сеть %.0f КБ/с", m.CPU, m.NetworkKBps)
-		drawText(hdc, metric, rightX, 72, max(80, w-rightX-20), 18, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	if app.settings.MiniShowNextStep {
+		drawText(hdc, "Далее · "+next, rightX, rightY, max(80, w-rightX-20), 16, 9, 550, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		rightY += 16
 	}
-	if app.progress > 0 {
+	if metric := miniMetricsText(metricsSnapshot()); metric != "" {
+		drawText(hdc, metric, rightX, rightY, max(80, w-rightX-20), 16, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	}
+	if app.settings.MiniShowProgress {
 		bar := RECT{int32(rightX), 92, rc.Right - 20, 98}
 		roundFill(hdc, bar, surfaceButtonColor(), 3)
 		bw := int32(float64(bar.Right-bar.Left) * app.progress)
@@ -3781,6 +3813,56 @@ func drawMiniMode(hdc uintptr, rc RECT) {
 	}
 	drawButton(hdc, app.miniCancelRect, "Отменить", false)
 	drawButton(hdc, app.miniPostponeRect, "+10 минут", true)
+}
+
+func miniTaskName() string {
+	if app.schedule.active {
+		if name := strings.TrimSpace(app.schedule.sourceTaskName); name != "" {
+			return name
+		}
+		return app.statusOrDefault()
+	}
+	return "Нет активной задачи"
+}
+
+func miniStepSummaries() (string, string) {
+	vs := getExecVisual040()
+	steps := currentScenarioSteps()
+	current, next := "Нет активного шага", "Нет следующего шага"
+	if vs.Running && vs.Current >= 0 {
+		if vs.Current < len(steps) {
+			current = stepSummary(steps[vs.Current])
+		}
+		if vs.Current+1 < len(steps) {
+			next = stepSummary(steps[vs.Current+1])
+		}
+	} else if app.schedule.active {
+		current = "Ожидание запуска"
+		if len(steps) > 0 {
+			next = stepSummary(steps[0])
+		}
+	}
+	return current, next
+}
+
+func miniMetricsText(m MetricSnapshot) string {
+	parts := []string{}
+	if app.settings.MiniShowCPU && m.CPU >= 0 {
+		parts = append(parts, fmt.Sprintf("CPU %.0f%%", m.CPU))
+	}
+	if app.settings.MiniShowGPU && m.GPU >= 0 {
+		parts = append(parts, fmt.Sprintf("GPU %.0f%%", m.GPU))
+	}
+	if app.settings.MiniShowRAM && m.RAMPercent >= 0 {
+		parts = append(parts, fmt.Sprintf("ОЗУ %.0f%%", m.RAMPercent))
+	}
+	if app.settings.MiniShowNetwork && m.NetworkKBps >= 0 {
+		parts = append(parts, "Сеть "+formatNetworkRateKB(m.NetworkKBps))
+	}
+	if app.settings.MiniShowDisk && m.DiskPercent >= 0 {
+		parts = append(parts, fmt.Sprintf("Диск %.0f%%", m.DiskPercent))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func drawActionPage(hdc uintptr, body RECT, w int) {
@@ -3943,6 +4025,7 @@ func drawSettingsPage(hdc uintptr, body RECT, w int) {
 	if app.settingsCategory == 1 {
 		drawSelectableButton(hdc, app.settingsSectionRects[0], "Оформление", app.settingsSubpage == 1)
 		drawSelectableButton(hdc, app.settingsSectionRects[1], "Интерфейс", app.settingsSubpage == 7)
+		drawSelectableButton(hdc, app.settingsSectionRects[2], "Мини-окно", app.settingsSubpage == 9)
 	} else if app.settingsCategory == 5 {
 		drawSelectableButton(hdc, app.settingsSectionRects[0], "Управление данными", app.settingsSubpage == 4)
 		drawSelectableButton(hdc, app.settingsSectionRects[1], "Статистика", app.settingsSubpage == 3)
@@ -3978,6 +4061,8 @@ func drawSettingsPage(hdc uintptr, body RECT, w int) {
 		drawInterfaceSettings040(hdc, body)
 	case 8:
 		drawEditorSettings(hdc, body)
+	case 9:
+		drawMiniWindowSettings(hdc, body)
 	}
 	if settingsReveal {
 		d2dResetTransform()
@@ -4076,7 +4161,7 @@ func drawInterfaceSettings040(hdc uintptr, body RECT) {
 	drawText(hdc, "Поверх остальных окон в мини-режиме", int(app.miniAlwaysTopRect.Right)+12, int(app.miniAlwaysTopRect.Top)-1, int(body.Right-app.miniAlwaysTopRect.Right)-30, 20, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	drawText(hdc, "Что показывать", left, int(app.miniOptionRects[0].Top)-26, 200, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	names := []string{"Задача", "Таймер", "Текущий шаг", "Метрики"}
-	vals := []bool{app.settings.MiniShowTask, app.settings.MiniShowCountdown, app.settings.MiniShowStep, app.settings.MiniShowMetrics}
+	vals := []bool{app.settings.MiniShowTask, app.settings.MiniShowCountdown, app.settings.MiniShowStep, app.settings.MiniShowCPU || app.settings.MiniShowGPU || app.settings.MiniShowRAM || app.settings.MiniShowNetwork || app.settings.MiniShowDisk}
 	for i, r := range app.miniOptionRects {
 		c := surfaceButtonColor()
 		if vals[i] {
@@ -4154,6 +4239,123 @@ func drawInterfaceSettings040(hdc uintptr, body RECT) {
 		for i, r := range app.networkRateUnitRects {
 			drawSelectableButton(hdc, r, unitNames[i], app.settings.NetworkRateBits == (i == 1))
 		}
+	}
+}
+
+func miniDetailedValues() []bool {
+	return []bool{
+		app.settings.MiniShowTask,
+		app.settings.MiniShowCountdown,
+		app.settings.MiniShowStep,
+		app.settings.MiniShowNextStep,
+		app.settings.MiniShowCPU,
+		app.settings.MiniShowGPU,
+		app.settings.MiniShowRAM,
+		app.settings.MiniShowNetwork,
+		app.settings.MiniShowDisk,
+		app.settings.MiniShowProgress,
+	}
+}
+
+func toggleMiniDetailedOption(index int) {
+	switch index {
+	case 0:
+		app.settings.MiniShowTask = !app.settings.MiniShowTask
+	case 1:
+		app.settings.MiniShowCountdown = !app.settings.MiniShowCountdown
+	case 2:
+		app.settings.MiniShowStep = !app.settings.MiniShowStep
+	case 3:
+		app.settings.MiniShowNextStep = !app.settings.MiniShowNextStep
+	case 4:
+		app.settings.MiniShowCPU = !app.settings.MiniShowCPU
+	case 5:
+		app.settings.MiniShowGPU = !app.settings.MiniShowGPU
+	case 6:
+		app.settings.MiniShowRAM = !app.settings.MiniShowRAM
+	case 7:
+		app.settings.MiniShowNetwork = !app.settings.MiniShowNetwork
+	case 8:
+		app.settings.MiniShowDisk = !app.settings.MiniShowDisk
+	case 9:
+		app.settings.MiniShowProgress = !app.settings.MiniShowProgress
+	}
+	app.settings.MiniShowMetrics = app.settings.MiniShowCPU || app.settings.MiniShowGPU || app.settings.MiniShowRAM || app.settings.MiniShowNetwork || app.settings.MiniShowDisk
+}
+
+func resizeMiniWindowIfActive() {
+	if !app.miniMode {
+		return
+	}
+	mw, mh := miniClientSize040()
+	var wr RECT
+	pGetWindowRect.Call(app.hwnd, uintptr(unsafe.Pointer(&wr)))
+	pSetWindowPos.Call(app.hwnd, 0, uintptr(wr.Left), uintptr(wr.Top), uintptr(mw), uintptr(mh), SWP_NOZORDER|SWP_NOACTIVATE)
+	layoutControls(app.hwnd)
+}
+
+func drawMiniWindowSettings(hdc uintptr, body RECT) {
+	left := app.settingsContentLeft
+	preview := app.miniPreviewRect
+	rv, hv := hoverCardRect(preview)
+	cardColor := blendColor(surfaceButtonColor(), surfacePanelColor(), .24)
+	if hv > 0 {
+		cardColor = blendColor(cardColor, theme.accent2, .04*hv)
+	}
+	roundFill(hdc, rv, cardColor, 14)
+	drawText(hdc, "Предпросмотр мини-окна", int(preview.Left)+16, int(preview.Top)+8, int(preview.Right-preview.Left)-32, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	values := miniDetailedValues()
+	name := "Задача PowerPilot"
+	if values[0] {
+		name = miniTaskName()
+	}
+	drawText(hdc, name, int(preview.Left)+16, int(preview.Top)+34, int(preview.Right-preview.Left)/2-24, 18, 10, 650, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	if values[1] {
+		drawText(hdc, app.countdownOrDefault(), int(preview.Left)+16, int(preview.Top)+52, int(preview.Right-preview.Left)/2-24, 29, 20, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	}
+	current, next := miniStepSummaries()
+	px := int(preview.Left) + int(preview.Right-preview.Left)/2
+	py := int(preview.Top) + 34
+	if values[2] {
+		drawText(hdc, "Сейчас · "+current, px, py, int(preview.Right)-px-16, 16, 9, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		py += 16
+	}
+	if values[3] {
+		drawText(hdc, "Далее · "+next, px, py, int(preview.Right)-px-16, 16, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		py += 16
+	}
+	if metric := miniMetricsText(metricsSnapshot()); metric != "" {
+		drawText(hdc, metric, px, py, int(preview.Right)-px-16, 16, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	}
+	if values[9] {
+		bar := RECT{preview.Left + 16, preview.Bottom - 14, preview.Right - 16, preview.Bottom - 9}
+		roundFill(hdc, bar, surfacePanelColor(), 3)
+		fillBar := bar
+		fillBar.Right = fillBar.Left + (fillBar.Right-fillBar.Left)*2/3
+		roundFill(hdc, fillBar, theme.accent, 3)
+	}
+
+	drawToggle(hdc, app.miniDetailedTopRect, app.settings.AlwaysOnTopMini)
+	drawText(hdc, "Поверх остальных окон", int(app.miniDetailedTopRect.Right)+12, int(app.miniDetailedTopRect.Top)-2, int(body.Right-app.miniDetailedTopRect.Right)-28, 20, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Что показывать", left, int(app.miniDetailedOptionRects[0].Top)-28, int(body.Right)-left-18, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	labels := []string{"Название задачи", "Таймер до конца", "Текущий шаг", "Следующий шаг", "Процессор", "Видеокарта", "Оперативная память", "Сеть", "Диски", "Прогресс задачи"}
+	for i, r := range app.miniDetailedOptionRects {
+		c := surfaceButtonColor()
+		if values[i] {
+			c = blendColor(c, theme.accent, .48)
+		}
+		rv, hover := hoverCardRect(r)
+		if hover > 0 && !values[i] {
+			c = blendColor(c, theme.accent2, .08*hover)
+		}
+		roundFill(hdc, rv, c, 9)
+		drawText(hdc, labels[i], int(r.Left)+8, int(r.Top), int(r.Right-r.Left)-16, int(r.Bottom-r.Top), 9, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	}
+	drawText(hdc, "Размер мини-окна", left, int(app.miniSizeRects[0].Top)-28, int(body.Right)-left-18, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	sizeLabels := []string{"Компактный", "Обычный", "Крупный"}
+	sizeValues := []int{90, 100, 120}
+	for i, r := range app.miniSizeRects {
+		drawSelectableButton(hdc, r, sizeLabels[i], miniScalePercent040() == sizeValues[i])
 	}
 }
 
@@ -7914,8 +8116,8 @@ func onClick(x, y int32) {
 			}
 		}
 		if app.settingsCategory == 1 {
-			pages := []int{1, 7}
-			for i, r := range app.settingsSectionRects {
+			pages := []int{1, 7, 9}
+			for i, r := range app.settingsSectionRects[:len(pages)] {
 				if pointIn(r, x, y) && app.settingsSubpage != pages[i] {
 					app.settingsSubpage = pages[i]
 					app.settingsScrollPx, app.settingsScrollTarget = 0, 0
@@ -7928,7 +8130,7 @@ func onClick(x, y int32) {
 			}
 		} else if app.settingsCategory == 5 {
 			pages := []int{4, 3}
-			for i, r := range app.settingsSectionRects {
+			for i, r := range app.settingsSectionRects[:len(pages)] {
 				if pointIn(r, x, y) && app.settingsSubpage != pages[i] {
 					app.settingsSubpage = pages[i]
 					app.settingsScrollPx, app.settingsScrollTarget = 0, 0
@@ -8138,7 +8340,10 @@ func onClick(x, y int32) {
 				case 2:
 					app.settings.MiniShowStep = !app.settings.MiniShowStep
 				case 3:
-					app.settings.MiniShowMetrics = !app.settings.MiniShowMetrics
+					enabled := !(app.settings.MiniShowCPU || app.settings.MiniShowGPU || app.settings.MiniShowRAM || app.settings.MiniShowNetwork || app.settings.MiniShowDisk)
+					app.settings.MiniShowMetrics = enabled
+					app.settings.MiniShowCPU, app.settings.MiniShowGPU = enabled, enabled
+					app.settings.MiniShowRAM, app.settings.MiniShowNetwork, app.settings.MiniShowDisk = enabled, enabled, enabled
 				}
 				saveSettings()
 				playUI(clickSound)
@@ -8192,6 +8397,35 @@ func onClick(x, y int32) {
 				layoutControls(app.hwnd)
 				invalidateScenarioGraphWindows()
 				return
+			}
+		case 9:
+			if pointIn(app.miniDetailedTopRect, x, y) {
+				app.settings.AlwaysOnTopMini = !app.settings.AlwaysOnTopMini
+				saveSettings()
+				applyMiniTopmost040()
+				playUI(clickSound)
+				invalidate(app.hwnd)
+				return
+			}
+			for i, r := range app.miniDetailedOptionRects {
+				if pointIn(r, x, y) {
+					toggleMiniDetailedOption(i)
+					saveSettings()
+					playUI(clickSound)
+					invalidate(app.hwnd)
+					return
+				}
+			}
+			sizeValues := []int{90, 100, 120}
+			for i, r := range app.miniSizeRects {
+				if pointIn(r, x, y) {
+					app.settings.MiniSize = sizeValues[i]
+					saveSettings()
+					resizeMiniWindowIfActive()
+					playUI(clickSound)
+					invalidate(app.hwnd)
+					return
+				}
 			}
 		case 1:
 			for i, r := range app.themeRects {
@@ -11004,8 +11238,26 @@ func listProcessInfos() []ProcessInfo {
 	for _, v := range byName {
 		out = append(out, v)
 	}
-	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].System != out[j].System {
+			return !out[i].System
+		}
+		unicodeI, unicodeJ := processNameHasNonASCII(out[i].Name), processNameHasNonASCII(out[j].Name)
+		if unicodeI != unicodeJ {
+			return unicodeI
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
 	return out
+}
+
+func processNameHasNonASCII(name string) bool {
+	for _, r := range name {
+		if r > 127 {
+			return true
+		}
+	}
+	return false
 }
 
 func processImagePathAndSession(pid uint32) (string, bool) {

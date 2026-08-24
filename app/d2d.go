@@ -86,8 +86,8 @@ type d2dRenderer struct {
 	appBrush        uintptr
 	scenarioBitmaps [8]uintptr
 	scenarioBrushes [8]uintptr
-	captionBitmaps  [7]uintptr
-	captionBrushes  [7]uintptr
+	captionBitmaps  [8]uintptr
+	captionBrushes  [8]uintptr
 	active          bool
 }
 
@@ -637,7 +637,7 @@ func d2dEnsureCaptionIcon(kind int) bool {
 	if ui2d.captionBrushes[kind] != 0 {
 		return true
 	}
-	data := [][]byte{captionClosePNGData, captionFullscreenPNGData, captionMinimizePNGData, captionMiniPNGData, captionExitMiniPNGData, captionPinPNGData, captionRestorePNGData}[kind]
+	data := [][]byte{captionClosePNGData, captionFullscreenPNGData, captionMinimizePNGData, captionMiniPNGData, captionExitMiniPNGData, captionPinPNGData, captionRestorePNGData, captionUnpinPNGData}[kind]
 	bmp, brush := d2dCreateImageBrush(data, 22, 22)
 	if bmp == 0 || brush == 0 {
 		return false

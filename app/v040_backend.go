@@ -800,10 +800,21 @@ func normalizeV040Settings() {
 		app.settings.UIScale = 100
 	}
 	app.settings.UIScale = clampInt(app.settings.UIScale, 90, 125)
-	if !app.settings.MiniShowTask && !app.settings.MiniShowCountdown && !app.settings.MiniShowStep && !app.settings.MiniShowMetrics {
+	if !app.settings.MiniShowTask && !app.settings.MiniShowCountdown && !app.settings.MiniShowStep && !app.settings.MiniShowMetrics && !app.settings.MiniLayoutMigrated {
 		app.settings.MiniShowTask = true
 		app.settings.MiniShowCountdown = true
 		app.settings.MiniShowStep = true
+	}
+	if !app.settings.MiniLayoutMigrated {
+		if app.settings.MiniShowMetrics {
+			app.settings.MiniShowCPU = true
+			app.settings.MiniShowGPU = true
+			app.settings.MiniShowRAM = true
+			app.settings.MiniShowNetwork = true
+			app.settings.MiniShowDisk = true
+		}
+		app.settings.MiniShowProgress = true
+		app.settings.MiniLayoutMigrated = true
 	}
 }
 

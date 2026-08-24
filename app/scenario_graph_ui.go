@@ -339,28 +339,43 @@ func drawScenarioGraphEditor(hdc uintptr, body RECT, w int, detached bool) {
 	roundFill(hdc, canvas, blendColor(theme.bg, surfacePanelColor(), .36), 14)
 	if ui2d.active {
 		d2dPushClip(canvas)
-		minorStep := int32(max(6, int(math.Round(24*g.Zoom))))
-		majorStep := int32(max(18, int(math.Round(96*g.Zoom))))
 		minor := blendColor(theme.border, theme.muted, .20)
 		major := blendColor(theme.border, theme.accent2, .28)
-		drawGrid := func(step int32, color uint32, stroke float32) {
-			ox := canvas.Left + int32(math.Mod(g.ViewX*g.Zoom, float64(step)))
-			oy := canvas.Top + int32(math.Mod(g.ViewY*g.Zoom, float64(step)))
-			for x := ox; x < canvas.Right; x += step {
-				d2dDrawLine(float32(x), float32(canvas.Top), float32(x), float32(canvas.Bottom), stroke, color)
+		drawGrid := func(worldStep float64, skipEvery int64, color uint32, stroke float32) {
+			leftWorld := -g.ViewX
+			topWorld := -g.ViewY
+			startX := math.Floor(leftWorld/worldStep) * worldStep
+			startY := math.Floor(topWorld/worldStep) * worldStep
+			for wx := startX; ; wx += worldStep {
+				x := canvas.Left + int32(math.Round((wx+g.ViewX)*g.Zoom))
+				if x >= canvas.Right {
+					break
+				}
+				line := int64(math.Round(wx / worldStep))
+				if x >= canvas.Left && (skipEvery <= 0 || line%skipEvery != 0) {
+					d2dDrawLine(float32(x), float32(canvas.Top), float32(x), float32(canvas.Bottom), stroke, color)
+				}
 			}
-			for y := oy; y < canvas.Bottom; y += step {
-				d2dDrawLine(float32(canvas.Left), float32(y), float32(canvas.Right), float32(y), stroke, color)
+			for wy := startY; ; wy += worldStep {
+				y := canvas.Top + int32(math.Round((wy+g.ViewY)*g.Zoom))
+				if y >= canvas.Bottom {
+					break
+				}
+				line := int64(math.Round(wy / worldStep))
+				if y >= canvas.Top && (skipEvery <= 0 || line%skipEvery != 0) {
+					d2dDrawLine(float32(canvas.Left), float32(y), float32(canvas.Right), float32(y), stroke, color)
+				}
 			}
 		}
-		// The subdivision grid is visual detail, not permanent noise. Fade it in
-		// between 72% and 110% zoom while the coarse grid remains stable.
-		minorAlpha := clampFloat((g.Zoom-.72)/(1.10-.72), 0, 1)
+		// The 24-unit subdivision appears only when it is genuinely useful. Major
+		// lines are skipped by the subdivision pass, so overlapping pixels no longer
+		// look like a doubled grid while zooming or panning.
+		minorAlpha := clampFloat((g.Zoom-1.35)/(1.85-1.35), 0, 1)
 		minorAlpha = minorAlpha * minorAlpha * (3 - 2*minorAlpha)
+		drawGrid(96, 0, major, .8)
 		if minorAlpha > .01 {
-			drawGrid(minorStep, blendColor(surfacePanelColor(), minor, minorAlpha), float32(.30+.15*minorAlpha))
+			drawGrid(24, 4, blendColor(surfacePanelColor(), minor, minorAlpha), float32(.30+.15*minorAlpha))
 		}
-		drawGrid(majorStep, major, .8)
 		if app.graphMarquee {
 			marquee := graphRectNormalized(app.graphMarqueeStartX, app.graphMarqueeStartY, app.graphMarqueeX, app.graphMarqueeY)
 			d2dFillRoundedOpacity(marquee, theme.accent2, 3, .16)
@@ -507,9 +522,9 @@ func advanceGraphSettingsGearHover() bool {
 		if app.graphSettingsPanelClosing {
 			target = 0
 		}
-		step := .18
+		step := .32
 		if app.settings.AnimationMode == 1 {
-			step = .3
+			step = .52
 		}
 		if app.settings.AnimationMode == 2 {
 			step = 1
