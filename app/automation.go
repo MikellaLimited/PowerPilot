@@ -10,8 +10,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 // AutomationCondition types.
@@ -164,10 +166,11 @@ type conditionRuntime struct {
 var (
 	conditionRuntimeMu sync.Mutex
 	conditionRuntimes  = map[string]*conditionRuntime{}
+	automationIDSeq    atomic.Uint64
 )
 
 func newAutomationID(prefix string) string {
-	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), automationIDSeq.Add(1))
 }
 
 func resetConditionRuntimes() {
@@ -852,6 +855,9 @@ func pathSize(path string) (int64, bool) {
 }
 
 func executeScenarioSteps(s Schedule) bool {
+	if s.runID != "" && !scheduleRunIsCurrent(s.runID) {
+		return false
+	}
 	if s.closeBefore {
 		for _, p := range s.processes {
 			if !closeProcess(p, 8*time.Second) {
@@ -860,6 +866,12 @@ func executeScenarioSteps(s Schedule) bool {
 		}
 	}
 	for idx, step := range s.steps {
+		if s.runID != "" && !scheduleRunIsCurrent(s.runID) {
+			return false
+		}
+		if s.runID != "" && !waitForScheduleResume(s.runID) {
+			return false
+		}
 		execVisualStep040(idx)
 		attempts := 1
 		if step.OnError == 2 {
@@ -884,7 +896,15 @@ func executeScenarioSteps(s Schedule) bool {
 		}
 		if step.DelayAfter > 0 {
 			appendRunHistory("STEP", fmt.Sprintf("Пауза после шага %d: %d сек", idx+1, step.DelayAfter), s.runID)
-			time.Sleep(time.Duration(step.DelayAfter) * time.Second)
+			wait := time.Duration(step.DelayAfter) * time.Second
+			if s.runID == "" {
+				time.Sleep(wait)
+			} else if !sleepScheduleAware(s.runID, wait) {
+				return false
+			}
+			if s.runID != "" && !scheduleRunIsCurrent(s.runID) {
+				return false
+			}
 		}
 	}
 	return true
@@ -903,13 +923,41 @@ func executeOneScenarioStep(step ActionStep, s Schedule) error {
 			return fmt.Errorf("не закрыты: %s", strings.Join(failed, ", "))
 		}
 	case stepWait:
-		time.Sleep(time.Duration(max(step.Value, 1)) * time.Second)
+		wait := time.Duration(max(step.Value, 1)) * time.Second
+		if s.runID == "" {
+			time.Sleep(wait)
+		} else if !sleepScheduleAware(s.runID, wait) {
+			return fmt.Errorf("задача отменена во время ожидания")
+		}
 	case stepRunCommand:
 		cmdLine := strings.TrimSpace(step.Text)
 		if cmdLine == "" {
 			return fmt.Errorf("команда не задана")
 		}
-		c := exec.Command("cmd.exe", "/C", cmdLine)
+		literalPath := cmdLine
+		if len(literalPath) >= 2 && literalPath[0] == '"' && literalPath[len(literalPath)-1] == '"' {
+			literalPath = literalPath[1 : len(literalPath)-1]
+		}
+		var c *exec.Cmd
+		// The file picker stores a literal path. Passing that path through cmd.exe
+		// breaks on spaces and shell metacharacters, so launch real executables
+		// directly. Free-form commands still use the command processor.
+		if info, statErr := os.Stat(literalPath); statErr == nil && !info.IsDir() &&
+			(strings.EqualFold(filepath.Ext(literalPath), ".exe") || strings.EqualFold(filepath.Ext(literalPath), ".com")) {
+			c = exec.Command(literalPath)
+		} else if statErr == nil && !info.IsDir() {
+			// Documents, shortcuts and scripts selected through the picker should
+			// use their normal Windows association instead of being parsed as an
+			// unquoted command line.
+			shellExecute := syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
+			result, _, callErr := shellExecute.Call(0, uintptr(unsafe.Pointer(wstr("open"))), uintptr(unsafe.Pointer(wstr(literalPath))), 0, 0, SW_SHOW)
+			if result <= 32 {
+				return fmt.Errorf("Windows не удалось открыть файл (ShellExecute=%d): %v", result, callErr)
+			}
+			return nil
+		} else {
+			c = exec.Command("cmd.exe", "/D", "/S", "/C", cmdLine)
+		}
 		c.SysProcAttr = hiddenProcAttr()
 		if err := c.Start(); err != nil {
 			return err
@@ -919,7 +967,7 @@ func executeOneScenarioStep(step ActionStep, s Schedule) error {
 		if txt == "" {
 			txt = "Сценарий PowerPilot продолжает выполнение."
 		}
-		showNotification("PowerPilot", txt)
+		showWindowsNotification("PowerPilot", txt)
 	case stepMonitorOff:
 		monitorPower040(false)
 	case stepMonitorOn:
@@ -973,15 +1021,27 @@ func autoSavedScheduleTick(now time.Time) {
 }
 
 func startSavedAutomation(t SavedTask, now time.Time) {
+	graph := ScenarioGraph{}
+	conditions := append([]AutomationCondition(nil), t.Conditions...)
+	steps := cloneActionSteps(t.Steps)
+	if t.TaskKind == 1 {
+		graph = ensureScenarioGraph(cloneScenarioGraph(t.Graph), taskStateFromSaved040(t))
+		if scenarioGraphValidationError(graph) != "" {
+			appendHistory("ERROR", "Некорректная схема автозапуска: "+t.Name)
+			return
+		}
+		conditions, steps = nil, nil
+	}
 	s := Schedule{
 		active: true, action: t.Action, mode: 4, started: now, target: now, runID: newRunID(),
 		total: 0, sourceTaskID: t.ID, sourceTaskName: t.Name,
-		conditions:     append([]AutomationCondition(nil), t.Conditions...),
+		conditions:     conditions,
 		triggerLogic:   t.TriggerLogic,
-		steps:          cloneActionSteps(t.Steps),
+		steps:          steps,
 		closeBefore:    t.CloseBefore,
 		processes:      append([]string(nil), t.Processes...),
 		warningSeconds: t.WarningSeconds,
+		graph:          graph,
 	}
 	app.schedule = s
 	resetConditionRuntimes()

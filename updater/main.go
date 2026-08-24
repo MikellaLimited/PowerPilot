@@ -23,9 +23,15 @@ import (
 const (
 	processQueryLimitedInformation = 0x1000
 	synchronize                    = 0x00100000
+	errorAccessDenied              = syscall.Errno(5)
+	errorInvalidParameter          = syscall.Errno(87)
+	waitObject0                    = 0x00000000
 	waitTimeout                    = 0x00000102
+	waitFailed                     = 0xFFFFFFFF
 	swHide                         = 0
 )
+
+var errRelaunchedElevated = errors.New("updater relaunched elevated")
 
 var (
 	kernel32             = syscall.NewLazyDLL("kernel32.dll")
@@ -63,6 +69,9 @@ func main() {
 		return
 	}
 	if err := run(opt); err != nil {
+		if errors.Is(err, errRelaunchedElevated) {
+			return
+		}
 		writeResult(false, "update", err.Error())
 		return
 	}
@@ -140,6 +149,12 @@ func run(o options) error {
 		return relaunchElevated(o)
 	}
 	if err := waitForPID(o.PID, 45*time.Second); err != nil {
+		// A non-elevated updater cannot inspect an elevated PowerPilot process.
+		// Previously that case was mistaken for an already-exited process, so the
+		// updater tried to rename the executable while it was still in use.
+		if !o.Elevated && errors.Is(err, errorAccessDenied) {
+			return relaunchElevated(o)
+		}
 		return err
 	}
 
@@ -162,9 +177,11 @@ func run(o options) error {
 	}
 
 	incoming := o.AppPath + ".new"
-	oldPath := o.AppPath + ".old"
+	oldPath, err := availableOldPath(o.AppPath)
+	if err != nil {
+		return err
+	}
 	_ = os.Remove(incoming)
-	_ = os.Remove(oldPath)
 	if err := copyFile(stagedApp, incoming); err != nil {
 		return fmt.Errorf("stage target: %w", err)
 	}
@@ -319,24 +336,50 @@ func relaunchElevated(o options) error {
 	if r <= 32 {
 		return fmt.Errorf("UAC launch failed: %v", e)
 	}
-	return nil
+	return errRelaunchedElevated
 }
 
 func waitForPID(pid uint32, timeout time.Duration) error {
 	h, _, e := pOpenProcess.Call(processQueryLimitedInformation|synchronize, 0, uintptr(pid))
 	if h == 0 {
-		return nil
+		if errors.Is(e, errorInvalidParameter) {
+			// The process disappeared between launching the updater and opening it.
+			return nil
+		}
+		return fmt.Errorf("open PowerPilot process %d: %w", pid, e)
 	}
 	defer pCloseHandle.Call(h)
 	ms := uint32(timeout / time.Millisecond)
-	r, _, _ := pWaitForSingleObject.Call(h, uintptr(ms))
+	r, _, waitErr := pWaitForSingleObject.Call(h, uintptr(ms))
 	if r == waitTimeout {
 		return errors.New("PowerPilot did not exit before update timeout")
 	}
-	if r != 0 {
-		_ = e
+	if r == waitFailed {
+		return fmt.Errorf("wait for PowerPilot process %d: %w", pid, waitErr)
+	}
+	if r != waitObject0 {
+		return fmt.Errorf("unexpected wait result 0x%08x for PowerPilot process %d", uint32(r), pid)
 	}
 	return nil
+}
+
+// availableOldPath keeps a locked backup left by an older broken update from
+// blocking every subsequent update. The current executable is still backed up
+// separately in .powerpilot-update-backup for rollback.
+func availableOldPath(appPath string) (string, error) {
+	preferred := appPath + ".old"
+	if err := os.Remove(preferred); err == nil || errors.Is(err, os.ErrNotExist) {
+		return preferred, nil
+	}
+	for i := 1; i <= 100; i++ {
+		candidate := fmt.Sprintf("%s.old.%d", appPath, i)
+		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
+			return candidate, nil
+		} else if err != nil {
+			return "", fmt.Errorf("inspect update backup %s: %w", candidate, err)
+		}
+	}
+	return "", errors.New("too many stale PowerPilot.exe.old backups")
 }
 
 func copyFile(src, dst string) error {

@@ -16,8 +16,8 @@ func TestStableUpdateReleaseSource(t *testing.T) {
 	if got := powerPilotReleaseAPIURL(); got != "https://api.github.com/repos/MikellaLimited/PowerPilot/releases/latest" {
 		t.Fatalf("unexpected stable release URL: %s", got)
 	}
-	v, err := powerPilotReleaseVersion(powerPilotRelease{TagName: "v0.8.2"})
-	if err != nil || v != "0.8.2" {
+	v, err := powerPilotReleaseVersion(powerPilotRelease{TagName: "v0.8.3"})
+	if err != nil || v != "0.8.3" {
 		t.Fatalf("unexpected stable version: version=%q err=%v", v, err)
 	}
 }
@@ -29,11 +29,11 @@ func TestDevelopUpdateReleaseSource(t *testing.T) {
 	}
 	rel := powerPilotRelease{
 		TagName: "develop",
-		Body:    "Rolling test build\npowerpilot-develop-version: 0.8.2-dev.42\n",
+		Body:    "Rolling test build\npowerpilot-develop-version: 0.8.3-dev.42\n",
 		Assets:  []powerPilotReleaseAsset{{Name: "PowerPilot_Develop_Update.zip"}},
 	}
 	v, err := powerPilotReleaseVersion(rel)
-	if err != nil || v != "0.8.2-dev.42" {
+	if err != nil || v != "0.8.3-dev.42" {
 		t.Fatalf("unexpected develop version: version=%q err=%v", v, err)
 	}
 	asset, err := selectPowerPilotUpdateAsset(rel)
@@ -43,7 +43,7 @@ func TestDevelopUpdateReleaseSource(t *testing.T) {
 }
 
 func TestDevelopBuildOrdering(t *testing.T) {
-	if compareVersions("0.8.2-dev.41", "0.8.2-dev.42") >= 0 {
+	if compareVersions("0.8.3-dev.41", "0.8.3-dev.42") >= 0 {
 		t.Fatal("newer develop build must compare greater")
 	}
 }

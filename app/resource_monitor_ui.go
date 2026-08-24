@@ -79,7 +79,7 @@ func drawResourceMonitor(hdc uintptr, body RECT, w int) {
 		{"Видеокарта", metricPercentText(snap.GPU), averageTemperatureValueText("gpu"), vramText(snap.VRAMUsedMB)},
 		{"Оперативная память", metricPercentText(snap.RAMPercent), "", ramText(snap)},
 		{"Диски", metricPercentText(selectedDiskActivity(snap)), averageTemperatureValueText("disk"), diskSpaceText(snap)},
-		{"Сеть", "↓ " + formatRateValueKB(snap.NetworkDownKBps), "", "↑ " + formatRateValueKB(snap.NetworkUpKBps)},
+		{"Сеть", "↓ " + formatNetworkRateKB(snap.NetworkDownKBps), "", "↑ " + formatNetworkRateKB(snap.NetworkUpKBps)},
 		{"Питание", powerValueText(snap), "", powerSubText(snap)},
 	}
 	for i, r := range app.resourceCardRects {
@@ -220,6 +220,40 @@ func formatRateValueKB(kb float64) string {
 	return fmt.Sprintf("%.0f КБ/с", kb)
 }
 
+func formatNetworkRateKB(kb float64) string {
+	return formatNetworkRateKBWithUnit(kb, app.settings.NetworkRateBits)
+}
+
+func formatNetworkRateKBWithUnit(kb float64, bits bool) string {
+	if kb < 0 || math.IsNaN(kb) || math.IsInf(kb, 0) {
+		return "—"
+	}
+	bytesPerSecond := kb * 1024
+	if bits {
+		bitsPerSecond := bytesPerSecond * 8
+		switch {
+		case bitsPerSecond >= 1_000_000_000:
+			return fmt.Sprintf("%.1f Гбит/с", bitsPerSecond/1_000_000_000)
+		case bitsPerSecond >= 1_000_000:
+			return fmt.Sprintf("%.1f Мбит/с", bitsPerSecond/1_000_000)
+		case bitsPerSecond >= 1_000:
+			return fmt.Sprintf("%.0f Кбит/с", bitsPerSecond/1_000)
+		default:
+			return fmt.Sprintf("%.0f бит/с", bitsPerSecond)
+		}
+	}
+	switch {
+	case bytesPerSecond >= 1024*1024*1024:
+		return fmt.Sprintf("%.1f ГБ/с", bytesPerSecond/(1024*1024*1024))
+	case bytesPerSecond >= 1024*1024:
+		return fmt.Sprintf("%.1f МБ/с", bytesPerSecond/(1024*1024))
+	case bytesPerSecond >= 1024:
+		return fmt.Sprintf("%.0f КБ/с", bytesPerSecond/1024)
+	default:
+		return fmt.Sprintf("%.0f Б/с", bytesPerSecond)
+	}
+}
+
 func graphMetricValue(s MetricSnapshot, kind int) float64 {
 	switch kind {
 	case 0:
@@ -254,10 +288,7 @@ func graphValueText(kind int, v float64) string {
 		return "—"
 	}
 	if kind == 4 {
-		if v >= 1024 {
-			return fmt.Sprintf("%.1f МБ/с", v/1024)
-		}
-		return fmt.Sprintf("%.0f КБ/с", v)
+		return formatNetworkRateKB(v)
 	}
 	return fmt.Sprintf("%.0f%%", v)
 }
@@ -313,7 +344,11 @@ func drawResourceGraph(hdc uintptr, r RECT, kind int) {
 		}
 		plotTop = maxBottom + 10
 	}
-	plot := RECT{r.Left + 44, plotTop, r.Right - 12, r.Bottom - 36}
+	axisLabelW := int32(36)
+	if kind == 4 {
+		axisLabelW = 58
+	}
+	plot := RECT{r.Left + axisLabelW + 8, plotTop, r.Right - 12, r.Bottom - 36}
 	if plot.Right <= plot.Left || plot.Bottom <= plot.Top {
 		return
 	}
@@ -325,7 +360,7 @@ func drawResourceGraph(hdc uintptr, r RECT, kind int) {
 		yy := float32(plot.Top) + float32(plot.Bottom-plot.Top)*float32(i)/4
 		d2dDrawLine(float32(plot.Left), yy, float32(plot.Right), yy, .55, blendColor(theme.border, theme.muted, .18))
 		labelV := yMax * (1 - float64(i)/4)
-		drawText(hdc, graphValueText(kind, labelV), int(r.Left)+4, int(yy)-8, 36, 16, 8, 400, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, graphValueText(kind, labelV), int(r.Left)+4, int(yy)-8, int(axisLabelW), 16, 8, 400, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 	}
 	if len(vals) < 2 {
 		drawText(hdc, "Собираю данные…", int(plot.Left), int(plot.Top), int(plot.Right-plot.Left), int(plot.Bottom-plot.Top), 12, 500, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)

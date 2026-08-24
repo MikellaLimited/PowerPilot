@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,11 +23,11 @@ import (
 
 // PowerPilot 0.4.0 - Win32 + Direct2D/DirectWrite, no external runtime.
 
-const appVersion = "0.8.2"
+const appVersion = "0.8.3"
 const normalMinClientW = 640
 const normalMinClientH = 650
 const miniClientW = 500
-const miniClientH = 176
+const miniClientH = 218
 
 //go:embed assets/click.wav
 var clickSound []byte
@@ -87,6 +88,9 @@ var captionExitMiniPNGData []byte
 
 //go:embed assets/caption-pin.png
 var captionPinPNGData []byte
+
+//go:embed assets/caption-unpin.png
+var captionUnpinPNGData []byte
 
 //go:embed assets/caption-restore.png
 var captionRestorePNGData []byte
@@ -328,6 +332,9 @@ const (
 	WM_RESOURCE_UPDATED     = WM_APP + 3
 	WM_NOTIFICATION_CHANGED = WM_APP + 4
 	WM_RBUTTONUP            = 0x0205
+	WM_RBUTTONDOWN          = 0x0204
+	WM_MBUTTONDOWN          = 0x0207
+	WM_MBUTTONUP            = 0x0208
 	WM_LBUTTONDBLCLK        = 0x0203
 
 	MF_STRING       = 0x00000000
@@ -394,6 +401,8 @@ const (
 	idCondDelay      = 134
 	idResourceSearch = 135
 	idTimelineTicks  = 136
+	idGraphWidth     = 137
+	idGraphHeight    = 138
 )
 
 type POINT struct{ X, Y int32 }
@@ -504,61 +513,83 @@ type SavedTask struct {
 	Favorite       bool                  `json:"favorite,omitempty"`
 	Paused         bool                  `json:"paused,omitempty"`
 	TaskKind       int                   `json:"task_kind,omitempty"` // 0 simple, 1 block
+	Graph          ScenarioGraph         `json:"graph,omitempty"`
 }
 
 type Settings struct {
-	Action                    int                   `json:"action"`
-	Mode                      int                   `json:"mode"`
-	DelayHours                int                   `json:"delay_hours"`
-	DelayMinutes              int                   `json:"delay_minutes"`
-	DelaySeconds              int                   `json:"delay_seconds"`
-	Exact                     string                `json:"exact"`
-	IdleMinutes               int                   `json:"idle_minutes"`
-	WatchProcess              string                `json:"watch_process"`
-	CloseBefore               bool                  `json:"close_before"`
-	Processes                 []string              `json:"processes"`
-	AutoStart                 bool                  `json:"auto_start"`
-	MinimizeToTray            bool                  `json:"minimize_to_tray"`
-	WarningSeconds            int                   `json:"warning_seconds"`
-	Sounds                    bool                  `json:"sounds"`
-	SoundVolume               int                   `json:"sound_volume"`
-	Notifications             bool                  `json:"notifications"`
-	WakeScheduledTasks        bool                  `json:"wake_scheduled_tasks"`
-	WakeLeadMinutes           int                   `json:"wake_lead_minutes"`
-	ThemeMode                 int                   `json:"theme_mode"`
-	Background                int                   `json:"background"`
-	SurfaceStyle              int                   `json:"surface_style"`
-	AnimationMode             int                   `json:"animation_mode"`
-	LockMinimumSize           bool                  `json:"lock_minimum_size"`
-	LockCurrentSize           bool                  `json:"lock_current_size"`
-	LockedWindowW             int                   `json:"locked_window_w,omitempty"`
-	LockedWindowH             int                   `json:"locked_window_h,omitempty"`
-	AdvancedConditions        []AutomationCondition `json:"advanced_conditions,omitempty"`
-	TriggerLogic              int                   `json:"trigger_logic"`
-	ActionSteps               []ActionStep          `json:"action_steps,omitempty"`
-	Recurrence                RecurrenceSpec        `json:"recurrence"`
-	SafetyFullscreen          bool                  `json:"safety_fullscreen"`
-	SafetyRecentInput         bool                  `json:"safety_recent_input"`
-	SafetyIdleMinutes         int                   `json:"safety_idle_minutes"`
-	SafetyProcesses           []string              `json:"safety_processes"`
-	ShowSystemProcesses       bool                  `json:"show_system_processes"`
-	HideZeroResourceProcesses bool                  `json:"hide_zero_resource_processes"`
-	ConfirmedSystemProcesses  []string              `json:"confirmed_system_processes,omitempty"`
-	TaskKind                  int                   `json:"task_kind,omitempty"` // 0 simple, 1 advanced
-	AlwaysOnTopMini           bool                  `json:"always_on_top_mini"`
-	MiniShowTask              bool                  `json:"mini_show_task"`
-	MiniShowCountdown         bool                  `json:"mini_show_countdown"`
-	MiniShowStep              bool                  `json:"mini_show_step"`
-	MiniShowMetrics           bool                  `json:"mini_show_metrics"`
-	MiniSize                  int                   `json:"mini_size"`
-	UIScale                   int                   `json:"ui_scale"`
-	ResourceRefreshMS         int                   `json:"resource_refresh_ms"`
-	ResourceTimelineMode      int                   `json:"resource_timeline_mode,omitempty"` // 0 clock time, 1 relative to current sample
-	ResourceTimelineTicks     int                   `json:"resource_timeline_ticks,omitempty"`
-	IdleSecondsMigrated       bool                  `json:"idle_seconds_migrated,omitempty"`
-	GlobalHotkeys             bool                  `json:"global_hotkeys"`
-	TemperatureAutoUpdate     bool                  `json:"temperature_auto_update"`
-	SavedTasks                []SavedTask           `json:"saved_tasks"`
+	Action                        int                   `json:"action"`
+	Mode                          int                   `json:"mode"`
+	DelayHours                    int                   `json:"delay_hours"`
+	DelayMinutes                  int                   `json:"delay_minutes"`
+	DelaySeconds                  int                   `json:"delay_seconds"`
+	Exact                         string                `json:"exact"`
+	IdleMinutes                   int                   `json:"idle_minutes"`
+	WatchProcess                  string                `json:"watch_process"`
+	CloseBefore                   bool                  `json:"close_before"`
+	Processes                     []string              `json:"processes"`
+	AutoStart                     bool                  `json:"auto_start"`
+	MinimizeToTray                bool                  `json:"minimize_to_tray"`
+	WarningSeconds                int                   `json:"warning_seconds"`
+	Sounds                        bool                  `json:"sounds"`
+	SoundVolume                   int                   `json:"sound_volume"`
+	Notifications                 bool                  `json:"notifications"`
+	TaskMinuteWarningNotification bool                  `json:"task_minute_warning_notification"`
+	NotificationSounds            bool                  `json:"notification_sounds"`
+	WakeScheduledTasks            bool                  `json:"wake_scheduled_tasks"`
+	WakeLeadMinutes               int                   `json:"wake_lead_minutes"`
+	ThemeMode                     int                   `json:"theme_mode"`
+	Background                    int                   `json:"background"`
+	SurfaceStyle                  int                   `json:"surface_style"`
+	AnimationMode                 int                   `json:"animation_mode"`
+	LockMinimumSize               bool                  `json:"lock_minimum_size"`
+	LockCurrentSize               bool                  `json:"lock_current_size"`
+	LockedWindowW                 int                   `json:"locked_window_w,omitempty"`
+	LockedWindowH                 int                   `json:"locked_window_h,omitempty"`
+	AdvancedConditions            []AutomationCondition `json:"advanced_conditions,omitempty"`
+	TriggerLogic                  int                   `json:"trigger_logic"`
+	ActionSteps                   []ActionStep          `json:"action_steps,omitempty"`
+	Recurrence                    RecurrenceSpec        `json:"recurrence"`
+	SafetyFullscreen              bool                  `json:"safety_fullscreen"`
+	SafetyRecentInput             bool                  `json:"safety_recent_input"`
+	SafetyIdleMinutes             int                   `json:"safety_idle_minutes"`
+	SafetyProcesses               []string              `json:"safety_processes"`
+	ShowSystemProcesses           bool                  `json:"show_system_processes"`
+	HideZeroResourceProcesses     bool                  `json:"hide_zero_resource_processes"`
+	ConfirmedSystemProcesses      []string              `json:"confirmed_system_processes,omitempty"`
+	TaskKind                      int                   `json:"task_kind,omitempty"` // 0 simple, 1 advanced
+	AlwaysOnTopMini               bool                  `json:"always_on_top_mini"`
+	MiniShowTask                  bool                  `json:"mini_show_task"`
+	MiniShowCountdown             bool                  `json:"mini_show_countdown"`
+	MiniShowStep                  bool                  `json:"mini_show_step"`
+	MiniShowMetrics               bool                  `json:"mini_show_metrics"`
+	MiniShowNextStep              bool                  `json:"mini_show_next_step,omitempty"`
+	MiniShowCPU                   bool                  `json:"mini_show_cpu,omitempty"`
+	MiniShowGPU                   bool                  `json:"mini_show_gpu,omitempty"`
+	MiniShowRAM                   bool                  `json:"mini_show_ram,omitempty"`
+	MiniShowNetwork               bool                  `json:"mini_show_network,omitempty"`
+	MiniShowDisk                  bool                  `json:"mini_show_disk,omitempty"`
+	MiniShowProgress              bool                  `json:"mini_show_progress,omitempty"`
+	MiniLayoutMigrated            bool                  `json:"mini_layout_migrated,omitempty"`
+	MiniSize                      int                   `json:"mini_size"`
+	UIScale                       int                   `json:"ui_scale"`
+	ResourceRefreshMS             int                   `json:"resource_refresh_ms"`
+	ResourceTimelineMode          int                   `json:"resource_timeline_mode,omitempty"` // 0 clock time, 1 relative to current sample
+	ResourceTimelineTicks         int                   `json:"resource_timeline_ticks,omitempty"`
+	NetworkRateBits               bool                  `json:"network_rate_bits,omitempty"`
+	GraphWindowSize               int                   `json:"graph_window_size,omitempty"`
+	GraphWindowWidth              int                   `json:"graph_window_width,omitempty"`
+	GraphWindowHeight             int                   `json:"graph_window_height,omitempty"`
+	GraphWindowSizeLocked         bool                  `json:"graph_window_size_locked,omitempty"`
+	GraphAutoRemoveSingleJunction bool                  `json:"graph_auto_remove_single_junction,omitempty"`
+	GraphSnapToGrid               bool                  `json:"graph_snap_to_grid,omitempty"`
+	GraphShowErrorOptions         bool                  `json:"graph_show_error_options"`
+	SettingsCompactTabs           bool                  `json:"settings_compact_tabs,omitempty"`
+	LastScenarioTaskID            string                `json:"last_scenario_task_id,omitempty"`
+	IdleSecondsMigrated           bool                  `json:"idle_seconds_migrated,omitempty"`
+	GlobalHotkeys                 bool                  `json:"global_hotkeys"`
+	TemperatureAutoUpdate         bool                  `json:"temperature_auto_update"`
+	SavedTasks                    []SavedTask           `json:"saved_tasks"`
+	ScenarioGraph                 ScenarioGraph         `json:"scenario_graph,omitempty"`
 }
 
 type HistoryItem struct {
@@ -580,6 +611,9 @@ type ProcessInfo struct {
 
 type Schedule struct {
 	active           bool
+	executing        bool
+	paused           bool
+	pausedAt         time.Time
 	action           int
 	mode             int
 	target           time.Time
@@ -588,6 +622,7 @@ type Schedule struct {
 	started          time.Time
 	total            time.Duration
 	warned           bool
+	systemWarned     bool
 	conditions       []AutomationCondition
 	triggerLogic     int
 	steps            []ActionStep
@@ -602,6 +637,7 @@ type Schedule struct {
 	conditionsLogged bool
 	lastWaitDetail   string
 	lastWaitLog      time.Time
+	graph            ScenarioGraph
 }
 
 type App struct {
@@ -624,6 +660,9 @@ type App struct {
 	hoverSeen                              bool
 	hoverKey                               int64
 	hoverRect                              RECT
+	graphHoverAnim                         float64
+	graphHoverKey                          int64
+	graphHoverRect                         RECT
 	tooltipRect                            RECT
 	tooltipText                            string
 	tooltipSince                           time.Time
@@ -703,15 +742,18 @@ type App struct {
 	wakeScheduledRect                      RECT
 	wakeLeadFieldRect                      RECT
 	hotkeysRect                            RECT
-	settingsTabs                           [7]RECT
-	settingsSectionRects                   [2]RECT
+	settingsTabs                           [8]RECT
+	settingsCompactTabsRect                RECT
+	settingsSectionRects                   [3]RECT
 	settingsCategory                       int
 	resourceTimelineModeRects              [2]RECT
 	resourceTimelineTicksTrackRect         RECT
 	resourceTimelineTicksKnobRect          RECT
 	resourceTimelineTicksValueRect         RECT
+	networkRateUnitRects                   [2]RECT
 	settingsSubpage                        int
 	settingsContentTop                     int
+	settingsContentLeft                    int
 	settingsScrollTrack                    RECT
 	settingsScrollThumb                    RECT
 	settingsScrollPx                       float64
@@ -722,6 +764,8 @@ type App struct {
 	surfaceRects                           [5]RECT
 	animationRects                         [3]RECT
 	notificationsRect                      RECT
+	minuteWarningRect                      RECT
+	notificationSoundsRect                 RECT
 	recurrenceKindRects                    [3]RECT
 	recurrenceDayRects                     [7]RECT
 	recurrenceEnabledRect                  RECT
@@ -960,6 +1004,9 @@ type App struct {
 	miniAlwaysTopRect                      RECT
 	miniOptionRects                        [4]RECT
 	miniSizeRects                          [3]RECT
+	miniDetailedOptionRects                [10]RECT
+	miniPreviewRect                        RECT
+	miniDetailedTopRect                    RECT
 	uiScaleRects                           [4]RECT
 	resourceCardRects                      [6]RECT
 	resourceRefreshRects                   [5]RECT
@@ -997,7 +1044,87 @@ type App struct {
 	resourceStatsSortRects                 [6]RECT
 	resourceStatsSort                      int
 	resourceStatsSortDesc                  bool
+	resourceStatsListScrollPx              float64
+	resourceStatsListScrollTarget          float64
+	resourceStatsListScrollMax             float64
+	resourceStatsListScrollTrack           RECT
+	resourceStatsListScrollThumb           RECT
 	conditionGroupCollapsed                map[string]bool
+	graphCanvasRect                        RECT
+	graphPaletteRects                      [3]RECT
+	graphZoomRects                         [3]RECT
+	graphNodeHits                          []GraphNodeHit
+	graphPortHits                          []GraphPortHit
+	graphFunctionHits                      []GraphFunctionHit
+	graphSelectedNodeID                    string
+	graphConnectingNodeID                  string
+	graphConnectingPort                    string
+	graphDragging                          bool
+	graphLastMouseX                        int32
+	graphLastMouseY                        int32
+	graphValidation                        []GraphValidationIssue
+	graphWindow                            uintptr
+	graphInputsNeedRepaint                 bool
+	graphDetachRect                        RECT
+	graphSaveRect                          RECT
+	graphSettingsRect                      RECT
+	graphSettingsPanelRect                 RECT
+	graphSettingsToggleRect                RECT
+	graphSettingsSnapRect                  RECT
+	graphSettingsErrorRect                 RECT
+	graphSettingsHoverAnim                 float64
+	graphSettingsPanelAnim                 float64
+	graphSettingsPanelClosing              bool
+	graphSettingsOpen                      bool
+	graphNameRect                          RECT
+	graphNameEdit                          uintptr
+	graphCloseConfirm                      bool
+	graphCloseConfirmRect                  RECT
+	graphCloseSaveRect                     RECT
+	graphCloseDiscardRect                  RECT
+	graphCloseCancelRect                   RECT
+	graphTitleBarRect                      RECT
+	graphTitleMinRect                      RECT
+	graphTitleMaxRect                      RECT
+	graphTitleCloseRect                    RECT
+	graphTitleHover                        int
+	graphWindowSizeRects                   [3]RECT
+	graphWindowWidthRect                   RECT
+	graphWindowHeightRect                  RECT
+	graphWindowLockRect                    RECT
+	graphSelectedNodes                     map[string]bool
+	graphSelectedEdgeID                    string
+	graphMarquee                           bool
+	graphMarqueeAdditive                   bool
+	graphMarqueeStartX                     int32
+	graphMarqueeStartY                     int32
+	graphMarqueeX                          int32
+	graphMarqueeY                          int32
+	graphRightDown                         bool
+	graphRightPanning                      bool
+	graphRightStartX                       int32
+	graphRightStartY                       int32
+	graphMiddleDown                        bool
+	graphMiddlePanning                     bool
+	graphMiddleStartX                      int32
+	graphMiddleStartY                      int32
+	graphContextOpen                       bool
+	graphContextRect                       RECT
+	graphContextItemRects                  []RECT
+	graphContextX                          int32
+	graphContextY                          int32
+	graphEditorOpen                        bool
+	graphEditorNodeID                      string
+	graphEditorItem                        int
+	graphEditorSection                     int
+	graphEditorLegacyBody                  RECT
+	graphEditorDX                          int32
+	graphEditorDY                          int32
+	graphEditorRect                        RECT
+	graphEditorCloseRect                   RECT
+	graphEditorActionRects                 [10]RECT
+	graphEditorTabRects                    [2]RECT
+	graphEditorText                        uintptr
 	mu                                     sync.Mutex
 	exiting                                bool
 	pageAnim                               float64
@@ -1028,9 +1155,11 @@ var fontCache = map[int]uintptr{}
 var controlBrush uintptr
 var editAnimOffsetX, editAnimOffsetY int
 var suppressEditVisibilityDuringLayout bool
+var deferredEditMoves map[uintptr]RECT
 var drawingInteractiveSurface bool
 var drawingTaskNavigationMenu bool
 var drawingNotificationPanel bool
+var drawingDetachedGraphWindow bool
 
 func rgb(r, g, b byte) uint32 { return uint32(r) | uint32(g)<<8 | uint32(b)<<16 }
 func wstr(s string) *uint16   { p, _ := syscall.UTF16PtrFromString(s); return p }
@@ -1074,6 +1203,7 @@ func main() {
 	}
 	if !existed {
 		app.settings.IdleSecondsMigrated = true
+		app.settings.AutoStart = true
 		app.settings.MinimizeToTray = true
 		app.settings.CloseBefore = true
 		app.settings.Sounds = true
@@ -1087,6 +1217,9 @@ func main() {
 		app.settings.TemperatureAutoUpdate = true
 	}
 	normalizeSettings()
+	if err := setAutoStart(app.settings.AutoStart); err != nil {
+		techLog040("autostart registration failed: " + err.Error())
+	}
 	normalizeV040Settings()
 	startupRecovery040()
 	normalizeSettings()
@@ -1113,7 +1246,9 @@ func main() {
 	}
 	app.settings.TaskKind = app.currentTaskKind
 	if app.currentTaskKind == 1 {
-		app.currentTaskSection = 7
+		// The detached scenario editor is intentionally not restored on startup.
+		// Open the saved-task list instead of leaving an empty advanced-task page.
+		app.currentTaskSection = 5
 	} else if app.currentTaskSection < 0 || app.currentTaskSection > 2 {
 		app.currentTaskSection = 0
 	}
@@ -1135,7 +1270,7 @@ func runUI() {
 	if icon == 0 {
 		icon, _, _ = pLoadIconW.Call(0, IDI_APPLICATION)
 	}
-	wc := WNDCLASSEX{CbSize: uint32(unsafe.Sizeof(WNDCLASSEX{})), Style: 0x0003, LpfnWndProc: syscall.NewCallback(wndProc), HInstance: hinst, HIcon: icon, HCursor: cursor, LpszClassName: cls, HIconSm: icon}
+	wc := WNDCLASSEX{CbSize: uint32(unsafe.Sizeof(WNDCLASSEX{})), Style: 0x000B, LpfnWndProc: syscall.NewCallback(wndProc), HInstance: hinst, HIcon: icon, HCursor: cursor, LpszClassName: cls, HIconSm: icon}
 	if r, _, _ := pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
 		panic("RegisterClassEx failed")
 	}
@@ -1248,6 +1383,17 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	case WM_NCHITTEST:
 		return hitTestWindow(hwnd, lParam)
 	case WM_PAINT:
+		// A detached editor temporarily swaps its window-owned UI state into app.
+		// Win32 may synchronously ask the main window to paint during that swap
+		// (for example while moving the editor). Painting then would render editor
+		// geometry into the main window and make controls appear to vanish.
+		if activeScenarioGraphSession != nil && hwnd == app.hwnd {
+			var ps PAINTSTRUCT
+			pBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+			pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+			mainPaintDeferredByGraphSession = true
+			return 0
+		}
 		paint(hwnd)
 		return 0
 	case WM_ERASEBKGND:
@@ -1258,6 +1404,10 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	case WM_MOUSEWHEEL:
 		delta := int16((wParam >> 16) & 0xFFFF)
+		if app.section == 7 || app.section == 13 {
+			zoomScenarioGraph(delta)
+			return 0
+		}
 		queueSmoothScroll(delta)
 		return 0
 	case WM_MOUSELEAVE:
@@ -1278,7 +1428,39 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		clearEditFocusForCanvasClick(x, y)
 		onClick(x, y)
 		return 0
+	case WM_LBUTTONDBLCLK:
+		x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
+		if handleGraphDoubleClick(x, y) {
+			return 0
+		}
+	case WM_RBUTTONDOWN:
+		if app.section == 7 || app.section == 13 {
+			x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
+			beginGraphRightButton(x, y)
+			return 0
+		}
+	case WM_RBUTTONUP:
+		if app.section == 7 || app.section == 13 {
+			x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
+			finishGraphRightButton(x, y)
+			return 0
+		}
+	case WM_MBUTTONDOWN:
+		if app.section == 7 || app.section == 13 {
+			x, y := clientPointToLogical040(int32(int16(loword(lParam))), int32(int16(hiword(lParam))))
+			if pointIn(app.graphCanvasRect, x, y) {
+				beginGraphMiddleButton(x, y)
+				return 0
+			}
+		}
+	case WM_MBUTTONUP:
+		if finishGraphMiddleButton() {
+			return 0
+		}
 	case WM_LBUTTONUP:
+		if finishScenarioGraphPointer() {
+			return 0
+		}
 		if app.draggingScenarioKind != 0 {
 			finishScenarioDrag()
 			pReleaseCapture.Call()
@@ -1416,6 +1598,7 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		pDestroyWindow.Call(hwnd)
 		return 0
 	case WM_DESTROY:
+		closeAllScenarioGraphSessions()
 		pKillTimer.Call(hwnd, 1)
 		pKillTimer.Call(hwnd, 2)
 		stopMetricSampler()
@@ -1481,6 +1664,7 @@ func createControls(hwnd uintptr) {
 	}
 	edit(idIdleMinutes, strconv.Itoa(max(app.settings.IdleMinutes, 30)), true)
 	edit(idWatchProcess, app.settings.WatchProcess, false)
+	pSendMessageW.Call(app.edits[idWatchProcess], EM_SETCUEBANNER, 1, uintptr(unsafe.Pointer(wstr("Введите имя процесса…"))))
 	edit(idWarning, strconv.Itoa(max(app.settings.WarningSeconds, 60)), true)
 	edit(idScheduleTime, app.settings.Recurrence.TimeHHMM, false)
 	edit(idCondThreshold, "10", false)
@@ -1488,6 +1672,8 @@ func createControls(hwnd uintptr) {
 	edit(idCondText, "", false)
 	edit(idStepValue, "10", true)
 	edit(idStepText, "", false)
+	pSendMessageW.Call(app.edits[idCondText], EM_SETCUEBANNER, 1, uintptr(unsafe.Pointer(wstr("Введите значение или выберите…"))))
+	pSendMessageW.Call(app.edits[idStepText], EM_SETCUEBANNER, 1, uintptr(unsafe.Pointer(wstr("Введите параметр…"))))
 	edit(idSafetyIdle, strconv.Itoa(max(app.settings.SafetyIdleMinutes, 5)), true)
 	edit(idSoundVolume, strconv.Itoa(clampInt(app.settings.SoundVolume, 0, 100)), true)
 	pSendMessageW.Call(app.edits[idSoundVolume], EM_SETLIMITTEXT, 3, 0)
@@ -1501,6 +1687,10 @@ func createControls(hwnd uintptr) {
 	edit(idResourceSearch, "Поиск по процессам", false)
 	edit(idTimelineTicks, strconv.Itoa(resourceTimelineTickCount()), true)
 	pSendMessageW.Call(app.edits[idTimelineTicks], EM_SETLIMITTEXT, 2, 0)
+	edit(idGraphWidth, strconv.Itoa(graphWindowWidth()), true)
+	edit(idGraphHeight, strconv.Itoa(graphWindowHeight()), true)
+	pSendMessageW.Call(app.edits[idGraphWidth], EM_SETLIMITTEXT, 4, 0)
+	pSendMessageW.Call(app.edits[idGraphHeight], EM_SETLIMITTEXT, 4, 0)
 	edit(idStepRetries, "2", true)
 	edit(idStepDelay, "0", true)
 	edit(idWakeLead, strconv.Itoa(max(app.settings.WakeLeadMinutes, 1)), true)
@@ -1513,13 +1703,12 @@ func createControls(hwnd uintptr) {
 	hName, _, _ := pCreateWindowExW.Call(0, uintptr(unsafe.Pointer(wstr("EDIT"))), uintptr(unsafe.Pointer(wstr(""))), WS_CHILD|WS_TABSTOP|ES_LEFT, 0, 0, 240, 36, hwnd, uintptr(idTaskName), 0, 0)
 	pSendMessageW.Call(hName, WM_SETFONT, app.font, 1)
 	app.edits[idTaskName] = hName
-	// Open the draft the user was actually editing before the previous exit.
-	// Advanced drafts return directly to the block scheme; simple drafts return
-	// to their last Action/When/Additional page.
+	// Restore simple drafts to their last editor page. Advanced drafts use a
+	// detached window, so startup lands on saved tasks instead of a blank host page.
 	if app.currentTaskKind == 1 {
-		app.section = 7
+		app.section = 5
 		app.lastTaskSection = 2
-		app.currentTaskSection = 7
+		app.currentTaskSection = 5
 	} else {
 		sec := app.currentTaskSection
 		if sec < 0 || sec > 2 {
@@ -1536,6 +1725,10 @@ func layoutControls(hwnd uintptr) {
 	var rc RECT
 	pGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
 	rc = logicalClientRect040(rc)
+	layoutControlsLogical(rc)
+}
+
+func layoutControlsLogical(rc RECT) {
 	w, h := int(rc.Right), int(rc.Bottom)
 	pad, gap := 20, 10
 	contentW := max(1, w-pad*2)
@@ -1765,19 +1958,30 @@ func layoutControls(hwnd uintptr) {
 	if app.section == 3 {
 		tabY := bodyTop + 58
 		tabGap := 6
-		tabW := (innerContentW - tabGap*6) / 7
-		for i := range app.settingsTabs {
-			x := innerLeft + i*(tabW+tabGap)
-			app.settingsTabs[i] = RECT{int32(x), int32(tabY), int32(x + tabW), int32(tabY + 48)}
+		tabW := 174
+		if app.settings.SettingsCompactTabs {
+			tabW = 52
 		}
-		headerContentY := tabY + 60
+		for i := range app.settingsTabs {
+			y := tabY + i*(42+tabGap)
+			app.settingsTabs[i] = RECT{int32(innerLeft), int32(y), int32(innerLeft + tabW), int32(y + 42)}
+		}
+		app.settingsCompactTabsRect = RECT{int32(pad + 142), int32(bodyTop + 14), int32(pad + 184), int32(bodyTop + 48)}
+		innerLeft += tabW + 14
+		innerContentW = innerRight - innerLeft
+		app.settingsContentLeft = innerLeft
+		headerContentY := tabY
 		for i := range app.settingsSectionRects {
 			app.settingsSectionRects[i] = RECT{}
 		}
 		if app.settingsCategory == 1 || app.settingsCategory == 5 {
 			sectionGap := 8
-			sectionW := (innerContentW - sectionGap) / 2
-			for i := range app.settingsSectionRects {
+			sectionCount := 2
+			if app.settingsCategory == 1 {
+				sectionCount = 3
+			}
+			sectionW := (innerContentW - sectionGap*(sectionCount-1)) / sectionCount
+			for i := 0; i < sectionCount; i++ {
 				x := innerLeft + i*(sectionW+sectionGap)
 				app.settingsSectionRects[i] = RECT{int32(x), int32(headerContentY), int32(x + sectionW), int32(headerContentY + 34)}
 			}
@@ -1811,20 +2015,25 @@ func layoutControls(hwnd uintptr) {
 			row5 := uiSettingsRowTop(contentY, 5)
 			row6 := uiSettingsRowTop(contentY, 6)
 			row7 := uiSettingsRowTop(contentY, 7)
+			row8 := uiSettingsRowTop(contentY, 8)
+			row9 := uiSettingsRowTop(contentY, 9)
 			app.autoRect = RECT{int32(innerLeft), int32(row0), int32(innerLeft + 28), int32(row0 + 28)}
 			app.trayRect = RECT{int32(innerLeft), int32(row1), int32(innerLeft + 28), int32(row1 + 28)}
 			app.notificationsRect = RECT{int32(innerLeft), int32(row2), int32(innerLeft + 28), int32(row2 + 28)}
+			app.minuteWarningRect = RECT{int32(innerLeft), int32(row3), int32(innerLeft + 28), int32(row3 + 28)}
+			app.notificationSoundsRect = RECT{int32(innerLeft), int32(row4), int32(innerLeft + 28), int32(row4 + 28)}
 			app.soundsRect, app.volumeTrackRect, app.volumeKnobRect, app.volumeValueRect = RECT{}, RECT{}, RECT{}, RECT{}
-			app.lockMinimumRect = RECT{int32(innerLeft), int32(row3), int32(innerLeft + 28), int32(row3 + 28)}
-			app.lockCurrentRect = RECT{int32(innerLeft), int32(row4), int32(innerLeft + 28), int32(row4 + 28)}
-			app.wakeScheduledRect = RECT{int32(innerLeft), int32(row5), int32(innerLeft + 28), int32(row5 + 28)}
-			app.hotkeysRect = RECT{int32(innerLeft), int32(row6), int32(innerLeft + 28), int32(row6 + 28)}
+			app.lockMinimumRect = RECT{int32(innerLeft), int32(row5), int32(innerLeft + 28), int32(row5 + 28)}
+			app.lockCurrentRect = RECT{int32(innerLeft), int32(row6), int32(innerLeft + 28), int32(row6 + 28)}
+			app.wakeScheduledRect = RECT{int32(innerLeft), int32(row7), int32(innerLeft + 28), int32(row7 + 28)}
+			app.hotkeysRect = RECT{int32(innerLeft), int32(row8), int32(innerLeft + 28), int32(row8 + 28)}
 			for i := range app.settingsResourceRefreshRects {
 				app.settingsResourceRefreshRects[i] = RECT{}
 			}
-			app.hideZeroResourceProcessesRect = RECT{int32(innerLeft), int32(row7), int32(innerLeft + 28), int32(row7 + 28)}
-			lineX := int(app.wakeScheduledRect.Right) + 12
-			_, app.wakeLeadFieldRect, _ = uiInlineNumberLayout("Пробуждать ПК по расписанию за", "мин", lineX, uiInlineSentenceY(row5), settingsRight, 2)
+			app.hideZeroResourceProcessesRect = RECT{int32(innerLeft), int32(row9), int32(innerLeft + 28), int32(row9 + 28)}
+			wakeLineX := innerLeft + 40
+			wakeFieldX := wakeLineX + uiTextWidth("Пробуждать ПК по расписанию за", uiMetricsDefault.InlineFontSize, uiMetricsDefault.InlineFontWeight) + 8
+			app.wakeLeadFieldRect = uiCompactFieldRect(wakeFieldX, row7, 40)
 			uiPlaceInlineNumberEdit(idWakeLead, app.wakeLeadFieldRect)
 		case 1:
 			rowY := contentY + 26
@@ -1843,12 +2052,14 @@ func layoutControls(hwnd uintptr) {
 				app.backgroundRects[i] = RECT{int32(x), int32(y), int32(x + bw), int32(y + 44)}
 			}
 			surfY := bgY + 126
-			sw := (settingsContentW - 40) / 5
+			sw := (settingsContentW - 20) / 3
 			for i := 0; i < 5; i++ {
-				x := innerLeft + i*(sw+10)
-				app.surfaceRects[i] = RECT{int32(x), int32(surfY), int32(x + sw), int32(surfY + 46)}
+				row, col := i/3, i%3
+				x := innerLeft + col*(sw+10)
+				y := surfY + row*54
+				app.surfaceRects[i] = RECT{int32(x), int32(y), int32(x + sw), int32(y + 46)}
 			}
-			animY := surfY + 78
+			animY := surfY + 132
 			animW := (settingsContentW - 20) / 3
 			for i := 0; i < 3; i++ {
 				x := innerLeft + i*(animW+10)
@@ -1958,7 +2169,7 @@ func layoutControls(hwnd uintptr) {
 				app.temperatureAutoUpdateRect = RECT{int32(innerLeft), int32(autoY), int32(settingsRight), int32(autoY + 48)}
 			} else {
 				bw := (settingsContentW - 12) / 2
-				bh := 68
+				bh := 84
 				for i := 0; i < 5; i++ {
 					row, col := i/2, i%2
 					x := innerLeft + col*(bw+12)
@@ -1980,43 +2191,52 @@ func layoutControls(hwnd uintptr) {
 			app.showSystemProcessesRect = RECT{int32(innerLeft), int32(row2), int32(innerLeft + 28), int32(row2 + 28)}
 			app.safetyProcessesRect = RECT{int32(innerLeft), int32(row3), int32(minInt(settingsRight, innerLeft+280)), int32(row3 + 42)}
 		case 6:
-			app.soundsRect = RECT{int32(innerLeft), int32(contentY + 10), int32(innerLeft + 28), int32(contentY + 38)}
+			app.soundsRect = RECT{int32(innerLeft), int32(contentY + 82), int32(innerLeft + 28), int32(contentY + 110)}
 			trackLeft := innerLeft + 4
 			valueW := 66
-			app.volumeValueRect = RECT{int32(settingsRight - valueW), int32(contentY + 88), int32(settingsRight), int32(contentY + 116)}
+			app.volumeValueRect = RECT{int32(settingsRight - valueW), int32(contentY + 40), int32(settingsRight), int32(contentY + 68)}
 			trackRight := int(app.volumeValueRect.Left) - 18
-			trackY := contentY + 98
+			trackY := contentY + 50
 			app.volumeTrackRect = RECT{int32(trackLeft), int32(trackY), int32(trackRight), int32(trackY + 8)}
 			knobX := trackLeft + (trackRight-trackLeft)*app.settings.SoundVolume/100
 			app.volumeKnobRect = RECT{int32(knobX - 8), int32(trackY - 5), int32(knobX + 8), int32(trackY + 13)}
 			move(app.edits[idSoundVolume], int(app.volumeValueRect.Left)+4, int(app.volumeValueRect.Top)+5, valueW-28, 18)
 			pShowWindow.Call(app.edits[idSoundVolume], SW_SHOW)
 		case 7:
-			// Keep the sticky sub-navigation clear of the first section title.
-			row0 := contentY + 34
-			app.miniAlwaysTopRect = RECT{int32(innerLeft), int32(row0), int32(innerLeft + 28), int32(row0 + 28)}
-			miniY := row0 + 72
-			miniGap := 8
-			miniW := (settingsContentW - miniGap*3) / 4
-			for i := 0; i < 4; i++ {
-				x := innerLeft + i*(miniW+miniGap)
-				app.miniOptionRects[i] = RECT{int32(x), int32(miniY), int32(x + miniW), int32(miniY + 38)}
+			app.miniAlwaysTopRect = RECT{}
+			for i := range app.miniOptionRects {
+				app.miniOptionRects[i] = RECT{}
 			}
-			sizeY := miniY + 86
-			sizeGap := 8
-			sizeW := (settingsContentW - sizeGap*2) / 3
-			for i := 0; i < 3; i++ {
-				x := innerLeft + i*(sizeW+sizeGap)
-				app.miniSizeRects[i] = RECT{int32(x), int32(sizeY), int32(x + sizeW), int32(sizeY + 38)}
+			for i := range app.miniSizeRects {
+				app.miniSizeRects[i] = RECT{}
 			}
-			scaleY := sizeY + 86
+			// Mini-window controls live on their dedicated page. Interface settings
+			// now start immediately with the application scale controls.
+			scaleY := contentY + 34
 			scaleGap := 8
 			scaleW := (settingsContentW - scaleGap*3) / 4
 			for i := 0; i < 4; i++ {
 				x := innerLeft + i*(scaleW+scaleGap)
 				app.uiScaleRects[i] = RECT{int32(x), int32(scaleY), int32(x + scaleW), int32(scaleY + 38)}
 			}
-			timelineY := scaleY + 100
+			graphSizeY := scaleY + 126
+			graphSizeGap := 8
+			graphSizeW := (settingsContentW - graphSizeGap*2) / 3
+			for i := range app.graphWindowSizeRects {
+				x := innerLeft + i*(graphSizeW+graphSizeGap)
+				app.graphWindowSizeRects[i] = RECT{int32(x), int32(graphSizeY), int32(x + graphSizeW), int32(graphSizeY + 38)}
+			}
+			manualY := graphSizeY + 54
+			fieldW := minInt(112, (settingsContentW-190)/2)
+			app.graphWindowWidthRect = RECT{int32(innerLeft), int32(manualY), int32(innerLeft + fieldW), int32(manualY + 36)}
+			app.graphWindowHeightRect = RECT{int32(innerLeft + fieldW + 34), int32(manualY), int32(innerLeft + fieldW*2 + 34), int32(manualY + 36)}
+			app.graphWindowLockRect = RECT{int32(innerLeft + fieldW*2 + 46), int32(manualY), int32(settingsRight), int32(manualY + 36)}
+			move(app.edits[idGraphWidth], int(app.graphWindowWidthRect.Left)+6, int(app.graphWindowWidthRect.Top)+7, int(app.graphWindowWidthRect.Right-app.graphWindowWidthRect.Left)-12, 20)
+			move(app.edits[idGraphHeight], int(app.graphWindowHeightRect.Left)+6, int(app.graphWindowHeightRect.Top)+7, int(app.graphWindowHeightRect.Right-app.graphWindowHeightRect.Left)-12, 20)
+			for _, id := range []int{idGraphWidth, idGraphHeight} {
+				pShowWindow.Call(app.edits[id], SW_SHOW)
+			}
+			timelineY := graphSizeY + 154
 			selectorGap := 8
 			selectorW := (settingsContentW - selectorGap) / 2
 			for i := range app.resourceTimelineModeRects {
@@ -2034,11 +2254,44 @@ func layoutControls(hwnd uintptr) {
 			if app.resourceTimelineTicksValueRect.Bottom > int32(headerContentY) && app.resourceTimelineTicksValueRect.Top < int32(viewportBottom) {
 				pShowWindow.Call(app.edits[idTimelineTicks], SW_SHOW)
 			}
+			unitY := tickY + 70
+			unitGap := 8
+			unitW := (settingsContentW - unitGap) / 2
+			for i := range app.networkRateUnitRects {
+				x := innerLeft + i*(unitW+unitGap)
+				app.networkRateUnitRects[i] = RECT{int32(x), int32(unitY), int32(x + unitW), int32(unitY + 38)}
+			}
+		case 8:
+			app.graphSettingsToggleRect = RECT{int32(innerLeft), int32(contentY + 18), int32(innerLeft + 28), int32(contentY + 46)}
+			app.graphSettingsSnapRect = RECT{int32(innerLeft), int32(contentY + 86), int32(innerLeft + 28), int32(contentY + 114)}
+			app.graphSettingsErrorRect = RECT{int32(innerLeft), int32(contentY + 154), int32(innerLeft + 28), int32(contentY + 182)}
+		case 9:
+			previewTop := contentY + 14
+			previewBottom := previewTop + 150
+			app.miniPreviewRect = RECT{int32(innerLeft), int32(previewTop), int32(settingsRight), int32(previewBottom)}
+			topToggleY := previewBottom + 26
+			app.miniDetailedTopRect = RECT{int32(innerLeft), int32(topToggleY), int32(innerLeft + 28), int32(topToggleY + 28)}
+			optionY := topToggleY + 66
+			optionGap := 8
+			optionW := (settingsContentW - optionGap) / 2
+			for i := range app.miniDetailedOptionRects {
+				row, col := i/2, i%2
+				x := innerLeft + col*(optionW+optionGap)
+				y := optionY + row*44
+				app.miniDetailedOptionRects[i] = RECT{int32(x), int32(y), int32(x + optionW), int32(y + 36)}
+			}
+			sizeY := optionY + 5*44 + 50
+			sizeGap := 8
+			sizeW := (settingsContentW - sizeGap*2) / 3
+			for i := range app.miniSizeRects {
+				x := innerLeft + i*(sizeW+sizeGap)
+				app.miniSizeRects[i] = RECT{int32(x), int32(sizeY), int32(x + sizeW), int32(sizeY + 38)}
+			}
 		}
 		for _, item := range []struct {
 			id int
 			r  RECT
-		}{{idWakeLead, app.wakeLeadFieldRect}, {idSafetyIdle, app.whenFieldRect}, {idSoundVolume, app.volumeValueRect}, {idTimelineTicks, app.resourceTimelineTicksValueRect}} {
+		}{{idWakeLead, app.wakeLeadFieldRect}, {idSafetyIdle, app.whenFieldRect}, {idSoundVolume, app.volumeValueRect}, {idTimelineTicks, app.resourceTimelineTicksValueRect}, {idGraphWidth, app.graphWindowWidthRect}, {idGraphHeight, app.graphWindowHeightRect}} {
 			if item.r.Right > item.r.Left && (item.r.Bottom <= int32(headerContentY) || item.r.Top >= int32(viewportBottom)) {
 				pShowWindow.Call(app.edits[item.id], SW_HIDE)
 			}
@@ -2268,6 +2521,10 @@ func layoutControls(hwnd uintptr) {
 
 	// Block task flowchart. Saved-task editing uses the same renderer with an isolated draft.
 	if app.section == 7 || app.section == 13 {
+		app.graphDetachRect, app.previewRect, app.graphSaveRect = RECT{}, RECT{}, RECT{}
+		pShowWindow.Call(app.edits[idTaskName], SW_HIDE)
+	}
+	if false && (app.section == 7 || app.section == 13) {
 		app.scenarioBackRect = RECT{}
 		app.triggerLogicRect = RECT{}
 		toolX := innerLeft
@@ -2453,10 +2710,18 @@ func layoutControls(hwnd uintptr) {
 		}
 		app.blockEditorBackRect = RECT{int32(innerLeft), int32(bodyTop + 18), int32(innerLeft + 110), int32(bodyTop + 52)}
 		app.blockEditorDoneRect = RECT{int32(innerRight - 120), int32(bodyTop + 18), int32(innerRight), int32(bodyTop + 52)}
+		tabY := bodyTop + 62
+		tabGap := 8
+		tabW := (innerContentW - tabGap) / 2
+		app.graphEditorTabRects[0] = RECT{int32(innerLeft), int32(tabY), int32(innerLeft + tabW), int32(tabY + 36)}
+		app.graphEditorTabRects[1] = RECT{int32(innerLeft + tabW + tabGap), int32(tabY), int32(innerRight), int32(tabY + 36)}
 		cols := 3
 		gap := 10
 		cw := (innerContentW - gap*2) / 3
-		startY := bodyTop + 82
+		startY := bodyTop + 112
+		for i := range app.modeRects {
+			app.modeRects[i] = RECT{}
+		}
 		for i := 0; i < 6; i++ {
 			row, col := i/cols, i%cols
 			x := innerLeft + col*(cw+gap)
@@ -2472,7 +2737,12 @@ func layoutControls(hwnd uintptr) {
 		for i := range app.editorTypeRects {
 			app.editorTypeRects[i] = RECT{}
 		}
-		startY := bodyTop + 52
+		tabY := bodyTop + 52
+		tabGap := 8
+		tabW := (innerContentW - tabGap) / 2
+		app.graphEditorTabRects[0] = RECT{int32(innerLeft), int32(tabY), int32(innerLeft + tabW), int32(tabY + 36)}
+		app.graphEditorTabRects[1] = RECT{int32(innerLeft + tabW + tabGap), int32(tabY), int32(innerRight), int32(tabY + 36)}
+		startY := bodyTop + 102
 		basic := []int{condCPU, condGPU, condNetwork, condDisk, condFileStable, condProcessExit}
 		basicCols, basicGap := 3, 7
 		basicW := (innerContentW - basicGap*(basicCols-1)) / basicCols
@@ -2585,7 +2855,7 @@ func layoutControls(hwnd uintptr) {
 
 		rows := (visibleStepTypes + cols - 1) / cols
 		fieldY := startY + rows*40 + 8
-		contentBottom := fieldY + 76
+		contentBottom := fieldY
 		app.whenFieldRect = RECT{}
 		app.timeFieldRects[0] = RECT{}
 		app.editorBrowseRect = RECT{}
@@ -2622,6 +2892,8 @@ func layoutControls(hwnd uintptr) {
 				app.powerPlanRects[i] = RECT{int32(x), int32(fieldY + 30), int32(x + pw), int32(fieldY + 68)}
 			}
 			contentBottom = fieldY + 68
+		} else if app.stepDraft.Type == stepLockWorkstation {
+			contentBottom = fieldY + 48
 		} else if app.stepDraft.Type == stepProcessPriority {
 			fieldW := max(180, innerContentW-132)
 			app.timeFieldRects[0] = RECT{int32(innerLeft), int32(fieldY + 28), int32(innerLeft + fieldW), int32(fieldY + 64)}
@@ -2636,30 +2908,48 @@ func layoutControls(hwnd uintptr) {
 			}
 			contentBottom = fieldY + 116
 		} else if app.stepDraft.Type == stepRunCommand || app.stepDraft.Type == stepNotify {
-			app.timeFieldRects[0] = RECT{int32(innerLeft), int32(fieldY + 28), int32(innerRight), int32(fieldY + 72)}
-			move(app.edits[idStepText], innerLeft+9, fieldY+39, innerContentW-18, 24)
+			textRight := innerRight
+			if app.stepDraft.Type == stepRunCommand {
+				textRight = innerRight - 154
+			}
+			app.timeFieldRects[0] = RECT{int32(innerLeft), int32(fieldY + 28), int32(textRight), int32(fieldY + 72)}
+			move(app.edits[idStepText], innerLeft+9, fieldY+39, max(40, textRight-innerLeft-18), 24)
 			pShowWindow.Call(app.edits[idStepText], SW_SHOW)
 			if app.stepDraft.Type == stepRunCommand {
-				app.editorBrowseRect = RECT{int32(innerRight - 118), int32(fieldY + 88), int32(innerRight), int32(fieldY + 124)}
-				contentBottom = fieldY + 124
+				app.editorBrowseRect = RECT{int32(textRight + 10), int32(fieldY + 28), int32(innerRight), int32(fieldY + 72)}
+				contentBottom = fieldY + 72
 			} else {
 				contentBottom = fieldY + 72
 			}
 		}
-		errorY := max(fieldY+118, contentBottom+16)
+		// Error handling is optional editor chrome; the execution model keeps the
+		// stored policy even while these controls are hidden.
+		errorY := max(fieldY+118, contentBottom+30)
 		errGap := 8
 		errW := (innerContentW - errGap*2) / 3
-		for i := 0; i < 3; i++ {
-			x := innerLeft + i*(errW+errGap)
-			app.stepErrorRects[i] = RECT{int32(x), int32(errorY), int32(x + errW), int32(errorY + 32)}
+		for i := range app.stepErrorRects {
+			app.stepErrorRects[i] = RECT{}
 		}
-		app.stepRetryFieldRect = RECT{int32(innerLeft), int32(errorY + 46), int32(innerLeft + 92), int32(errorY + 76)}
+		if app.settings.GraphShowErrorOptions {
+			for i := 0; i < 3; i++ {
+				x := innerLeft + i*(errW+errGap)
+				app.stepErrorRects[i] = RECT{int32(x), int32(errorY), int32(x + errW), int32(errorY + 32)}
+			}
+		}
+		fieldsY := errorY + 68
+		if !app.settings.GraphShowErrorOptions {
+			fieldsY = contentBottom + 34
+		}
+		app.stepRetryFieldRect = RECT{}
+		if app.settings.GraphShowErrorOptions && app.stepDraft.OnError == 2 {
+			app.stepRetryFieldRect = RECT{int32(innerLeft), int32(fieldsY), int32(innerLeft + 92), int32(fieldsY + 30)}
+		}
 		delayX := innerLeft
-		if app.stepDraft.OnError == 2 {
+		if app.settings.GraphShowErrorOptions && app.stepDraft.OnError == 2 {
 			delayX = innerLeft + 112
 		}
-		app.stepDelayFieldRect = RECT{int32(delayX), int32(errorY + 46), int32(delayX + 92), int32(errorY + 76)}
-		if app.stepDraft.OnError == 2 {
+		app.stepDelayFieldRect = RECT{int32(delayX), int32(fieldsY), int32(delayX + 92), int32(fieldsY + 30)}
+		if app.settings.GraphShowErrorOptions && app.stepDraft.OnError == 2 {
 			move(app.edits[idStepRetries], int(app.stepRetryFieldRect.Left)+6, int(app.stepRetryFieldRect.Top)+7, int(app.stepRetryFieldRect.Right-app.stepRetryFieldRect.Left)-12, 18)
 			pShowWindow.Call(app.edits[idStepRetries], SW_SHOW)
 		}
@@ -2734,9 +3024,9 @@ func resourceTimelineTickCount() int {
 func settingsVirtualContentHeight() int {
 	switch app.settingsSubpage {
 	case 0:
-		return 8*uiMetricsDefault.SettingsRowStep + 40
+		return 10*uiMetricsDefault.SettingsRowStep + 40
 	case 1:
-		return 390
+		return 460
 	case 2:
 		return 0
 	case 3:
@@ -2745,13 +3035,17 @@ func settingsVirtualContentHeight() int {
 		if app.settingsCategory == 4 {
 			return 430
 		}
-		return 275
+		return 340
 	case 5:
 		return 320
 	case 6:
 		return 150
 	case 7:
-		return 540
+		return 590
+	case 8:
+		return 230
+	case 9:
+		return 640
 	}
 	return 0
 }
@@ -2888,6 +3182,14 @@ func resumeCurrentTask() {
 	}
 	app.settings.TaskKind = app.currentTaskKind
 	if app.currentTaskKind == 1 {
+		if app.settings.LastScenarioTaskID != "" {
+			for i := range app.settings.SavedTasks {
+				if app.settings.SavedTasks[i].ID == app.settings.LastScenarioTaskID && app.settings.SavedTasks[i].TaskKind == 1 {
+					openSavedTaskEditor(i)
+					return
+				}
+			}
+		}
 		app.section = 7
 		app.lastTaskSection = 2
 	} else {
@@ -2995,6 +3297,23 @@ func invalidateVisibleEdits() {
 }
 
 func updateInputVisibility() {
+	if scenarioGraphDetachedInput && app.graphWindow != 0 && app.graphEditorOpen {
+		pInvalidateRect.Call(app.graphWindow, 0, 0)
+		return
+	}
+	if app.hwnd != 0 && !scenarioGraphDetachedInput && (app.section == 7 || app.section == 13) {
+		if session := scenarioGraphSessionForCurrentTarget(); session != nil {
+			pShowWindow.Call(session.HWND, SW_RESTORE)
+			pSetForegroundWindowGraph.Call(session.HWND)
+		} else {
+			openScenarioGraphWindow()
+		}
+		// The editor is an independent task window. The main window returns to
+		// the task list instead of retaining a redundant launcher page behind it.
+		app.section = 5
+		app.scenarioSavedDraft = false
+		app.editingSavedIdx = -1
+	}
 	if app.hwnd != 0 {
 		layoutControls(app.hwnd)
 	}
@@ -3404,10 +3723,14 @@ func drawCaptionGlyph(hdc uintptr, kind int, r RECT) {
 	if ui2d.active {
 		// Keep the compact vector caption set; only the pin uses the supplied bitmap.
 		if kind == 0 && app.miniMode {
+			iconKind := 5
+			if app.settings.AlwaysOnTopMini {
+				iconKind = 7
+			}
 			size := int32(20)
 			x := r.Left + (r.Right-r.Left-size)/2
 			y := r.Top + (r.Bottom-r.Top-size)/2
-			if d2dDrawCaptionIcon(5, RECT{x, y, x + size, y + size}) {
+			if d2dDrawCaptionIcon(iconKind, RECT{x, y, x + size, y + size}) {
 				return
 			}
 		}
@@ -3459,50 +3782,153 @@ func drawCaptionGlyph(hdc uintptr, kind int, r RECT) {
 }
 
 func drawMiniMode(hdc uintptr, rc RECT) {
-	pad := 20
 	w := int(rc.Right - rc.Left)
-	leftW := max(160, minInt(260, (w-pad*2-18)/2))
-	rightX := pad + leftW + 18
+	contentTop := 52
+	contentBottom := int(app.miniCancelRect.Top) - 8
+	card := RECT{12, int32(contentTop), int32(w - 12), int32(contentBottom)}
+	roundFill(hdc, card, blendColor(surfaceButtonColor(), surfacePanelColor(), .24), 11)
+	drawMiniDashboardContent(hdc, card, false)
+	pauseLabel := "Пауза"
+	if app.schedule.paused {
+		pauseLabel = "Продолжить"
+	}
+	drawButton(hdc, app.miniCancelRect, pauseLabel, true)
+	drawButton(hdc, app.miniPostponeRect, "Отменить", false)
+}
+
+// drawMiniDashboardContent is shared by the settings preview and the actual
+// mini window so their spacing, typography and progress geometry stay aligned.
+func drawMiniDashboardContent(hdc uintptr, card RECT, previewTitle bool) {
+	textScale := 1.0
+	if !previewTitle {
+		// The large mini-window preset used to enlarge only the window, leaving
+		// its text at the tiny 8-9 pt preview size. Keep compact readable and let
+		// normal/large presets scale the complete information hierarchy.
+		textScale = math.Max(1, float64(miniScalePercent040())/100.0)
+	}
+	scaled := func(v int) int { return int(math.Round(float64(v) * textScale)) }
+	pad := int32(scaled(16))
+	contentTop := int(card.Top) + scaled(7)
+	if previewTitle {
+		drawText(hdc, "Предпросмотр мини-окна", int(card.Left+pad), int(card.Top)+8, int(card.Right-card.Left-pad*2), 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		contentTop = int(card.Top) + 34
+	}
+
+	contentLeft := int(card.Left + pad)
+	contentRight := int(card.Right - pad)
+	columnGap := scaled(12)
+	columnW := (contentRight - contentLeft - columnGap) / 2
+	rightX := contentLeft + columnW + columnGap
+
+	leftY := contentTop
 	if app.settings.MiniShowTask {
-		status := app.statusOrDefault()
-		if !app.schedule.active {
-			status = "Нет активной задачи"
-		}
-		drawText(hdc, status, pad, 51, leftW, 16, 10, 600, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		drawText(hdc, miniTaskName(), contentLeft, leftY, columnW, scaled(19), scaled(11), 650, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		leftY += scaled(19)
 	}
 	if app.settings.MiniShowCountdown {
-		drawText(hdc, app.countdownOrDefault(), pad, 67, leftW, 32, 23, 500, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, app.countdownOrDefault(), contentLeft, leftY, columnW, scaled(31), scaled(22), 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		leftY += scaled(31)
 	}
+
+	current, next := miniStepSummaries()
 	if app.settings.MiniShowStep {
-		vs := getExecVisual040()
-		step := "Ожидание условия"
-		if vs.Running && vs.Current >= 0 {
-			steps := currentScenarioSteps()
-			if vs.Current < len(steps) {
-				step = stepSummary(steps[vs.Current])
-			}
-		} else if app.schedule.active {
-			step = "Задача активна"
-		} else {
-			step = "Нет активного шага"
+		drawText(hdc, "Сейчас · "+current, contentLeft, leftY, columnW, scaled(16), scaled(10), 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		leftY += scaled(16)
+	}
+	if app.settings.MiniShowNextStep {
+		drawText(hdc, "Далее · "+next, contentLeft, leftY, columnW, scaled(16), scaled(10), 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		leftY += scaled(16)
+	}
+
+	metrics := miniMetricParts(metricsSnapshot())
+	metricGap := scaled(5)
+	metricH := scaled(22)
+	metricW := (columnW - metricGap) / 2
+	for i, metric := range metrics {
+		row, col := i/2, i%2
+		x := rightX + col*(metricW+metricGap)
+		y := contentTop + row*(metricH+metricGap)
+		panel := RECT{int32(x), int32(y), int32(x + metricW), int32(y + metricH)}
+		roundFill(hdc, panel, blendColor(surfacePanelColor(), surfaceButtonColor(), .42), int32(scaled(6)))
+		drawText(hdc, metric, x+scaled(5), y, metricW-scaled(10), metricH, scaled(9), 550, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	}
+
+	if app.settings.MiniShowProgress {
+		bar := RECT{card.Left + pad, card.Bottom - int32(scaled(14)), card.Right - pad, card.Bottom - int32(scaled(9))}
+		roundFill(hdc, bar, surfacePanelColor(), 3)
+		progress := app.progress
+		if previewTitle && !app.schedule.active {
+			progress = 2.0 / 3.0
 		}
-		drawText(hdc, "Шаг · "+step, rightX, 51, max(80, w-rightX-20), 18, 10, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	}
-	if app.settings.MiniShowMetrics {
-		m := metricsSnapshot()
-		metric := fmt.Sprintf("CPU %.0f%% · Сеть %.0f КБ/с", m.CPU, m.NetworkKBps)
-		drawText(hdc, metric, rightX, 72, max(80, w-rightX-20), 18, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	}
-	if app.progress > 0 {
-		bar := RECT{int32(rightX), 92, rc.Right - 20, 98}
-		roundFill(hdc, bar, surfaceButtonColor(), 3)
-		bw := int32(float64(bar.Right-bar.Left) * app.progress)
-		if bw > 0 {
-			roundFill(hdc, RECT{bar.Left, bar.Top, bar.Left + bw, bar.Bottom}, theme.accent, 3)
+		progress = math.Max(0, math.Min(1, progress))
+		fillBar := bar
+		fillBar.Right = fillBar.Left + int32(float64(fillBar.Right-fillBar.Left)*progress)
+		if fillBar.Right > fillBar.Left {
+			roundFill(hdc, fillBar, theme.accent, 3)
 		}
 	}
-	drawButton(hdc, app.miniCancelRect, "Отменить", false)
-	drawButton(hdc, app.miniPostponeRect, "+10 минут", true)
+}
+
+func miniTaskName() string {
+	if app.schedule.active {
+		if name := strings.TrimSpace(app.schedule.sourceTaskName); name != "" {
+			return name
+		}
+		return app.statusOrDefault()
+	}
+	return "Нет активной задачи"
+}
+
+func miniStepSummaries() (string, string) {
+	vs := getExecVisual040()
+	steps := currentScenarioSteps()
+	current, next := "Нет активного шага", "Нет следующего шага"
+	if vs.Running && vs.Current >= 0 {
+		if vs.Current < len(steps) {
+			current = stepSummary(steps[vs.Current])
+		}
+		if vs.Current+1 < len(steps) {
+			next = stepSummary(steps[vs.Current+1])
+		}
+	} else if app.schedule.active {
+		current = "Ожидание запуска"
+		if len(steps) > 0 {
+			next = stepSummary(steps[0])
+		}
+	}
+	return current, next
+}
+
+func miniMetricParts(m MetricSnapshot) []string {
+	parts := []string{}
+	if app.settings.MiniShowCPU && m.CPU >= 0 {
+		parts = append(parts, fmt.Sprintf("CPU %.0f%%", m.CPU))
+	}
+	if app.settings.MiniShowGPU && m.GPU >= 0 {
+		parts = append(parts, fmt.Sprintf("GPU %.0f%%", m.GPU))
+	}
+	if app.settings.MiniShowRAM && m.RAMPercent >= 0 {
+		parts = append(parts, fmt.Sprintf("ОЗУ %.0f%%", m.RAMPercent))
+	}
+	if app.settings.MiniShowNetwork && m.NetworkKBps >= 0 {
+		parts = append(parts, "Сеть "+formatNetworkRateKB(m.NetworkKBps))
+	}
+	if app.settings.MiniShowDisk && m.DiskPercent >= 0 {
+		parts = append(parts, fmt.Sprintf("Диск %.0f%%", m.DiskPercent))
+	}
+	return parts
+}
+
+func miniMetricsLines(m MetricSnapshot) []string {
+	parts := miniMetricParts(m)
+	if len(parts) <= 3 {
+		if len(parts) == 0 {
+			return nil
+		}
+		return []string{strings.Join(parts, " · ")}
+	}
+	split := (len(parts) + 1) / 2
+	return []string{strings.Join(parts[:split], " · "), strings.Join(parts[split:], " · ")}
 }
 
 func drawActionPage(hdc uintptr, body RECT, w int) {
@@ -3621,7 +4047,8 @@ func drawExtraPage(hdc uintptr, body RECT, w int) {
 
 func drawSettingsPage(hdc uintptr, body RECT, w int) {
 	drawText(hdc, "Настройки", int(body.Left)+18, int(body.Top)+16, 240, 28, 20, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	tabNames := []string{"Общие", "Вид и интерфейс", "Звук", "Защита", "Компоненты и обновления", "Данные", "История"}
+	tabNames := []string{"Общие", "Вид и интерфейс", "Звук", "Защита", "Компоненты и обновления", "Данные", "История", "Редактор"}
+	tabIcons := []string{"●", "◐", "♪", "◆", "↻", "▤", "◷", "⌘"}
 	for i, r := range app.settingsTabs {
 		c := surfaceButtonColor()
 		if i == app.settingsCategory {
@@ -3635,25 +4062,41 @@ func drawSettingsPage(hdc uintptr, body RECT, w int) {
 		if hv > 0 && i != app.settingsCategory && ui2d.active {
 			d2dDrawRoundedOutline(rv, 9, float32(1+0.4*hv), blendColor(theme.border, theme.accent2, .42))
 		}
-		fontSize := 8
-		flags := uint32(DT_CENTER | DT_VCENTER | DT_WORDBREAK)
-		if uiTextWidth(tabNames[i], 10, 650)+12 <= int(r.Right-r.Left) {
-			fontSize = 10
-			flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE
-		} else if uiTextWidth(tabNames[i], 9, 650)+10 <= int(r.Right-r.Left) {
-			fontSize = 9
-			flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE
+		label := tabNames[i]
+		if app.settings.SettingsCompactTabs {
+			label = tabIcons[i]
 		}
-		drawText(hdc, tabNames[i], int(r.Left)+3, int(r.Top)+2, int(r.Right-r.Left)-6, int(r.Bottom-r.Top)-4, fontSize, 650, theme.text, flags)
+		fontSize := 9
+		if app.settings.SettingsCompactTabs {
+			fontSize = 18
+		}
+		flags := uint32(DT_CENTER | DT_VCENTER | DT_SINGLELINE)
+		if !app.settings.SettingsCompactTabs {
+			flags = DT_CENTER | DT_VCENTER | DT_WORDBREAK
+			if uiTextWidth(label, 10, 650)+12 <= int(r.Right-r.Left) {
+				fontSize = 10
+				flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE
+			} else if uiTextWidth(label, 9, 650)+10 <= int(r.Right-r.Left) {
+				fontSize = 9
+				flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE
+			}
+		}
+		drawText(hdc, label, int(r.Left)+3, int(r.Top)+2, int(r.Right-r.Left)-6, int(r.Bottom-r.Top)-4, fontSize, 650, theme.text, flags)
 	}
+	compactLabel := "«"
+	if app.settings.SettingsCompactTabs {
+		compactLabel = "»"
+	}
+	drawButton(hdc, app.settingsCompactTabsRect, compactLabel, false)
 	if app.settingsCategory == 1 {
 		drawSelectableButton(hdc, app.settingsSectionRects[0], "Оформление", app.settingsSubpage == 1)
 		drawSelectableButton(hdc, app.settingsSectionRects[1], "Интерфейс", app.settingsSubpage == 7)
+		drawSelectableButton(hdc, app.settingsSectionRects[2], "Мини-окно", app.settingsSubpage == 9)
 	} else if app.settingsCategory == 5 {
 		drawSelectableButton(hdc, app.settingsSectionRects[0], "Управление данными", app.settingsSubpage == 4)
 		drawSelectableButton(hdc, app.settingsSectionRects[1], "Статистика", app.settingsSubpage == 3)
 	}
-	settingsClip := RECT{body.Left, int32(app.settingsContentTop + int(app.settingsScrollPx)), body.Right - 12, body.Bottom - 32}
+	settingsClip := RECT{int32(app.settingsContentLeft - 7), int32(app.settingsContentTop + int(app.settingsScrollPx)), body.Right - 12, body.Bottom - 32}
 	if ui2d.active {
 		d2dPushClip(settingsClip)
 	}
@@ -3682,6 +4125,10 @@ func drawSettingsPage(hdc uintptr, body RECT, w int) {
 		drawSoundSettings(hdc, body)
 	case 7:
 		drawInterfaceSettings040(hdc, body)
+	case 8:
+		drawEditorSettings(hdc, body)
+	case 9:
+		drawMiniWindowSettings(hdc, body)
 	}
 	if settingsReveal {
 		d2dResetTransform()
@@ -3699,6 +4146,18 @@ func drawSettingsPage(hdc uintptr, body RECT, w int) {
 	}
 }
 
+func drawEditorSettings(hdc uintptr, body RECT) {
+	drawToggle(hdc, app.graphSettingsToggleRect, app.settings.GraphAutoRemoveSingleJunction)
+	x := int(app.graphSettingsToggleRect.Right) + 12
+	drawText(hdc, "Упрощать одиночные соединения", x, int(app.graphSettingsToggleRect.Top)-2, int(body.Right)-x-28, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	drawText(hdc, "Если в соединительный узел входит только один провод, PowerPilot удалит узел и соединит провода напрямую.", x, int(app.graphSettingsToggleRect.Top)+18, int(body.Right)-x-28, 38, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
+	drawToggle(hdc, app.graphSettingsSnapRect, app.settings.GraphSnapToGrid)
+	drawText(hdc, "Привязывать блоки к сетке", int(app.graphSettingsSnapRect.Right)+12, int(app.graphSettingsSnapRect.Top)-2, int(body.Right-app.graphSettingsSnapRect.Right)-28, 22, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "При перемещении координаты блока фиксируются по шагу сетки.", int(app.graphSettingsSnapRect.Right)+12, int(app.graphSettingsSnapRect.Top)+18, int(body.Right-app.graphSettingsSnapRect.Right)-28, 30, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
+	drawToggle(hdc, app.graphSettingsErrorRect, app.settings.GraphShowErrorOptions)
+	drawText(hdc, "Показывать настройку «При ошибке»", int(app.graphSettingsErrorRect.Right)+12, int(app.graphSettingsErrorRect.Top)-2, int(body.Right-app.graphSettingsErrorRect.Right)-28, 22, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+}
+
 func drawGeneralSettings(hdc uintptr, body RECT) {
 	baseY := app.settingsContentTop
 	items := []struct {
@@ -3709,6 +4168,8 @@ func drawGeneralSettings(hdc uintptr, body RECT) {
 		{app.autoRect, app.settings.AutoStart, "Запускать вместе с Windows", "PowerPilot запускается при входе в систему."},
 		{app.trayRect, app.settings.MinimizeToTray, "Сворачивать в трей при закрытии", "Закрытие скрывает окно, не отменяя задачу."},
 		{app.notificationsRect, app.settings.Notifications, "Уведомления Windows", "Предупреждения, автозапуски и защитные блокировки."},
+		{app.minuteWarningRect, app.settings.TaskMinuteWarningNotification, "Предупреждать за минуту", "Системное уведомление за минуту до завершения задачи."},
+		{app.notificationSoundsRect, app.settings.NotificationSounds, "Звук уведомлений", "Разрешить системный звук для уведомлений PowerPilot."},
 	}
 	for i, it := range items {
 		y := baseY + i*uiMetricsDefault.SettingsRowStep
@@ -3724,8 +4185,9 @@ func drawGeneralSettings(hdc uintptr, body RECT) {
 	drawText(hdc, "Текущие ширина и высота сохраняются и блокируют resize.", int(app.lockCurrentRect.Right)+12, int(app.lockCurrentRect.Top)+16, int(body.Right-app.lockCurrentRect.Right)-28, 16, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	drawToggle(hdc, app.wakeScheduledRect, app.settings.WakeScheduledTasks)
 	lineX := int(app.wakeScheduledRect.Right) + 12
-	pr, fr, sr := uiInlineNumberLayout("Пробуждать ПК по расписанию за", "мин", lineX, int(app.wakeScheduledRect.Top)+3, int(body.Right)-18, 2)
-	uiDrawInlineNumber(hdc, "Пробуждать ПК по расписанию за", "мин", pr, fr, sr)
+	drawText(hdc, "Пробуждать ПК по расписанию за", lineX, int(app.wakeScheduledRect.Top)-2, max(80, int(app.wakeLeadFieldRect.Left)-lineX-6), 20, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	roundFill(hdc, app.wakeLeadFieldRect, surfaceButtonColor(), 8)
+	drawText(hdc, "мин", int(app.wakeLeadFieldRect.Right)+5, int(app.wakeLeadFieldRect.Top), 34, int(app.wakeLeadFieldRect.Bottom-app.wakeLeadFieldRect.Top), 10, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	drawText(hdc, "Wake timer Windows", lineX, int(app.wakeScheduledRect.Top)+24, int(body.Right)-lineX-24, 15, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	drawToggle(hdc, app.hotkeysRect, app.settings.GlobalHotkeys)
 	drawText(hdc, "Глобальные горячие клавиши", int(app.hotkeysRect.Right)+12, int(app.hotkeysRect.Top)-2, int(body.Right-app.hotkeysRect.Right)-28, 19, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
@@ -3737,10 +4199,8 @@ func drawGeneralSettings(hdc uintptr, body RECT) {
 
 func drawSoundSettings(hdc uintptr, body RECT) {
 	baseY := app.settingsContentTop + 6
-	drawToggle(hdc, app.soundsRect, app.settings.Sounds)
-	drawText(hdc, "Звуки интерфейса", int(app.soundsRect.Right)+12, int(app.soundsRect.Top)-2, int(body.Right-app.soundsRect.Right)-30, 20, 13, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc, "Короткие звуки выбора, переходов и выполнения.", int(app.soundsRect.Right)+12, int(app.soundsRect.Top)+17, int(body.Right-app.soundsRect.Right)-30, 16, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	drawText(hdc, "Громкость интерфейса", int(body.Left)+18, baseY+64, 220, 20, 13, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	left := app.settingsContentLeft
+	drawText(hdc, "Громкость интерфейса", left, baseY, 260, 20, 13, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	if app.volumeTrackRect.Right > app.volumeTrackRect.Left {
 		roundFill(hdc, app.volumeTrackRect, surfaceButtonColor(), 4)
 		filled := app.volumeTrackRect
@@ -3755,43 +4215,14 @@ func drawSoundSettings(hdc uintptr, body RECT) {
 		roundFill(hdc, app.volumeValueRect, surfaceButtonColor(), 8)
 		drawText(hdc, "%", int(app.volumeValueRect.Right)-22, int(app.volumeValueRect.Top), 18, int(app.volumeValueRect.Bottom-app.volumeValueRect.Top), 11, 600, theme.accent2, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
+	drawToggle(hdc, app.soundsRect, app.settings.Sounds)
+	drawText(hdc, "Звуки интерфейса", int(app.soundsRect.Right)+12, int(app.soundsRect.Top)-2, int(body.Right-app.soundsRect.Right)-30, 20, 13, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Короткие звуки выбора, переходов и выполнения.", int(app.soundsRect.Right)+12, int(app.soundsRect.Top)+17, int(body.Right-app.soundsRect.Right)-30, 16, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 }
 
 func drawInterfaceSettings040(hdc uintptr, body RECT) {
-	drawText(hdc, "Мини-режим", int(body.Left)+18, int(app.miniAlwaysTopRect.Top)-26, 220, 20, 13, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	drawToggle(hdc, app.miniAlwaysTopRect, app.settings.AlwaysOnTopMini)
-	drawText(hdc, "Поверх остальных окон в мини-режиме", int(app.miniAlwaysTopRect.Right)+12, int(app.miniAlwaysTopRect.Top)-1, int(body.Right-app.miniAlwaysTopRect.Right)-30, 20, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc, "Что показывать", int(body.Left)+18, int(app.miniOptionRects[0].Top)-26, 200, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	names := []string{"Задача", "Таймер", "Текущий шаг", "Метрики"}
-	vals := []bool{app.settings.MiniShowTask, app.settings.MiniShowCountdown, app.settings.MiniShowStep, app.settings.MiniShowMetrics}
-	for i, r := range app.miniOptionRects {
-		c := surfaceButtonColor()
-		if vals[i] {
-			c = blendColor(c, theme.accent, .48)
-		}
-		rv, hv := hoverCardRect(r)
-		if hv > 0 && !vals[i] {
-			c = blendColor(c, theme.accent2, .08*hv)
-		}
-		roundFill(hdc, rv, c, 9)
-		drawText(hdc, names[i], int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 10, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-	}
-	drawText(hdc, "Размер мини-приложения", int(body.Left)+18, int(app.miniSizeRects[0].Top)-26, 240, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	sizeLabels := []string{"Компактный", "Обычный", "Крупный"}
-	sizeValues := []int{90, 100, 120}
-	for i, r := range app.miniSizeRects {
-		c := surfaceButtonColor()
-		if miniScalePercent040() == sizeValues[i] {
-			c = blendColor(c, theme.accent, .48)
-		}
-		rv, hv := hoverCardRect(r)
-		if hv > 0 && miniScalePercent040() != sizeValues[i] {
-			c = blendColor(c, theme.accent2, .08*hv)
-		}
-		roundFill(hdc, rv, c, 9)
-		drawText(hdc, sizeLabels[i], int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 10, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-	}
-	drawText(hdc, "Масштаб интерфейса", int(body.Left)+18, int(app.uiScaleRects[0].Top)-26, 240, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	left := app.settingsContentLeft
+	drawText(hdc, "Масштаб интерфейса", left, int(app.uiScaleRects[0].Top)-26, 240, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	scales := []int{90, 100, 110, 125}
 	for i, r := range app.uiScaleRects {
 		c := surfaceButtonColor()
@@ -3805,14 +4236,27 @@ func drawInterfaceSettings040(hdc uintptr, body RECT) {
 		roundFill(hdc, rv, c, 9)
 		drawText(hdc, fmt.Sprintf("%d%%", scales[i]), int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 11, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
-	drawText(hdc, "Масштаб меняет весь интерфейс PowerPilot, включая поля ввода и размеры минимального окна.", int(body.Left)+18, int(app.uiScaleRects[0].Bottom)+16, int(body.Right-body.Left)-36, 34, 10, 400, theme.muted, DT_LEFT|DT_VCENTER)
+	drawText(hdc, "Масштаб меняет весь интерфейс PowerPilot, включая поля ввода и размеры минимального окна.", left, int(app.uiScaleRects[0].Bottom)+16, int(body.Right)-left-18, 34, 10, 400, theme.muted, DT_LEFT|DT_VCENTER)
+	drawText(hdc, "Размер отдельного редактора", left, int(app.graphWindowSizeRects[0].Top)-26, 280, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	graphSizes := []string{"1280 × 820", "1440 × 900", "1600 × 960"}
+	for i, r := range app.graphWindowSizeRects {
+		drawSelectableButton(hdc, r, graphSizes[i], app.settings.GraphWindowSize == i)
+	}
+	drawText(hdc, "×", int(app.graphWindowWidthRect.Right)+7, int(app.graphWindowWidthRect.Top), 20, int(app.graphWindowWidthRect.Bottom-app.graphWindowWidthRect.Top), 13, 650, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+	roundFill(hdc, app.graphWindowWidthRect, surfaceButtonColor(), 8)
+	roundFill(hdc, app.graphWindowHeightRect, surfaceButtonColor(), 8)
+	lockLabel := "Зафиксировать размер"
+	if app.settings.GraphWindowSizeLocked {
+		lockLabel = "Размер зафиксирован"
+	}
+	drawSelectableButton(hdc, app.graphWindowLockRect, lockLabel, app.settings.GraphWindowSizeLocked)
 	timelineTitleY := int(app.resourceTimelineModeRects[0].Top) - 24
-	drawText(hdc, "Временная шкала ресурсов", int(body.Left)+18, timelineTitleY, int(body.Right-body.Left)-36, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Временная шкала ресурсов", left, timelineTitleY, int(body.Right)-left-18, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	modeNames := []string{"Реальное время", "Относительно: −время → 0"}
 	for i, r := range app.resourceTimelineModeRects {
 		drawSelectableButton(hdc, r, modeNames[i], app.settings.ResourceTimelineMode == i)
 	}
-	drawText(hdc, "Количество отметок шкалы", int(body.Left)+18, int(app.resourceTimelineTicksTrackRect.Top)-30, 250, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Количество отметок шкалы", left, int(app.resourceTimelineTicksTrackRect.Top)-30, 250, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	if app.resourceTimelineTicksTrackRect.Right > app.resourceTimelineTicksTrackRect.Left {
 		roundFill(hdc, app.resourceTimelineTicksTrackRect, surfaceButtonColor(), 4)
 		filled := app.resourceTimelineTicksTrackRect
@@ -3822,11 +4266,107 @@ func drawInterfaceSettings040(hdc uintptr, body RECT) {
 		d2dFillEllipse(float32((app.resourceTimelineTicksKnobRect.Left+app.resourceTimelineTicksKnobRect.Right)/2), float32((app.resourceTimelineTicksKnobRect.Top+app.resourceTimelineTicksKnobRect.Bottom)/2), 5, 5, theme.accent)
 		roundFill(hdc, app.resourceTimelineTicksValueRect, surfaceButtonColor(), 8)
 	}
+	if app.networkRateUnitRects[0].Right > app.networkRateUnitRects[0].Left {
+		drawText(hdc, "Единицы сетевой скорости", left, int(app.networkRateUnitRects[0].Top)-28, int(body.Right)-left-18, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		unitNames := []string{"Байты/с · КБ, МБ, ГБ", "Биты/с · Кбит, Мбит, Гбит"}
+		for i, r := range app.networkRateUnitRects {
+			drawSelectableButton(hdc, r, unitNames[i], app.settings.NetworkRateBits == (i == 1))
+		}
+	}
+}
+
+func miniDetailedValues() []bool {
+	return []bool{
+		app.settings.MiniShowTask,
+		app.settings.MiniShowCountdown,
+		app.settings.MiniShowStep,
+		app.settings.MiniShowNextStep,
+		app.settings.MiniShowCPU,
+		app.settings.MiniShowGPU,
+		app.settings.MiniShowRAM,
+		app.settings.MiniShowNetwork,
+		app.settings.MiniShowDisk,
+		app.settings.MiniShowProgress,
+	}
+}
+
+func toggleMiniDetailedOption(index int) {
+	switch index {
+	case 0:
+		app.settings.MiniShowTask = !app.settings.MiniShowTask
+	case 1:
+		app.settings.MiniShowCountdown = !app.settings.MiniShowCountdown
+	case 2:
+		app.settings.MiniShowStep = !app.settings.MiniShowStep
+	case 3:
+		app.settings.MiniShowNextStep = !app.settings.MiniShowNextStep
+	case 4:
+		app.settings.MiniShowCPU = !app.settings.MiniShowCPU
+	case 5:
+		app.settings.MiniShowGPU = !app.settings.MiniShowGPU
+	case 6:
+		app.settings.MiniShowRAM = !app.settings.MiniShowRAM
+	case 7:
+		app.settings.MiniShowNetwork = !app.settings.MiniShowNetwork
+	case 8:
+		app.settings.MiniShowDisk = !app.settings.MiniShowDisk
+	case 9:
+		app.settings.MiniShowProgress = !app.settings.MiniShowProgress
+	}
+	app.settings.MiniShowMetrics = app.settings.MiniShowCPU || app.settings.MiniShowGPU || app.settings.MiniShowRAM || app.settings.MiniShowNetwork || app.settings.MiniShowDisk
+}
+
+func resizeMiniWindowIfActive() {
+	if !app.miniMode {
+		return
+	}
+	mw, mh := miniClientSize040()
+	var wr RECT
+	pGetWindowRect.Call(app.hwnd, uintptr(unsafe.Pointer(&wr)))
+	pSetWindowPos.Call(app.hwnd, 0, uintptr(wr.Left), uintptr(wr.Top), uintptr(mw), uintptr(mh), SWP_NOZORDER|SWP_NOACTIVATE)
+	layoutControls(app.hwnd)
+}
+
+func drawMiniWindowSettings(hdc uintptr, body RECT) {
+	left := app.settingsContentLeft
+	preview := app.miniPreviewRect
+	rv, hv := hoverCardRect(preview)
+	cardColor := blendColor(surfaceButtonColor(), surfacePanelColor(), .24)
+	if hv > 0 {
+		cardColor = blendColor(cardColor, theme.accent2, .04*hv)
+	}
+	roundFill(hdc, rv, cardColor, 14)
+	drawMiniDashboardContent(hdc, preview, true)
+	values := miniDetailedValues()
+
+	drawToggle(hdc, app.miniDetailedTopRect, app.settings.AlwaysOnTopMini)
+	drawText(hdc, "Поверх остальных окон", int(app.miniDetailedTopRect.Right)+12, int(app.miniDetailedTopRect.Top)-2, int(body.Right-app.miniDetailedTopRect.Right)-28, 20, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Что показывать", left, int(app.miniDetailedOptionRects[0].Top)-28, int(body.Right)-left-18, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	labels := []string{"Название задачи", "Таймер до конца", "Текущий шаг", "Следующий шаг", "Процессор", "Видеокарта", "Оперативная память", "Сеть", "Диски", "Прогресс задачи"}
+	for i, r := range app.miniDetailedOptionRects {
+		c := surfaceButtonColor()
+		if values[i] {
+			c = blendColor(c, theme.accent, .48)
+		}
+		rv, hover := hoverCardRect(r)
+		if hover > 0 && !values[i] {
+			c = blendColor(c, theme.accent2, .08*hover)
+		}
+		roundFill(hdc, rv, c, 9)
+		drawText(hdc, labels[i], int(r.Left)+8, int(r.Top), int(r.Right-r.Left)-16, int(r.Bottom-r.Top), 9, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	}
+	drawText(hdc, "Размер мини-окна", left, int(app.miniSizeRects[0].Top)-28, int(body.Right)-left-18, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	sizeLabels := []string{"Компактный", "Обычный", "Крупный"}
+	sizeValues := []int{90, 100, 120}
+	for i, r := range app.miniSizeRects {
+		drawSelectableButton(hdc, r, sizeLabels[i], miniScalePercent040() == sizeValues[i])
+	}
 }
 
 func drawAppearanceSettings(hdc uintptr, body RECT) {
 	contentY := app.settingsContentTop
-	drawText(hdc, "Тема", int(body.Left)+18, contentY, 120, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	left := app.settingsContentLeft
+	drawText(hdc, "Тема", left, contentY, 120, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	names := []string{"Тёмная ☾", "Светлая ☀", "Системная ◐"}
 	for i, r := range app.themeRects {
 		c := surfaceButtonColor()
@@ -3844,7 +4384,7 @@ func drawAppearanceSettings(hdc uintptr, body RECT) {
 		drawText(hdc, names[i], int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 12, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
 	bgTitleY := int(app.themeRects[0].Bottom) + 12
-	drawText(hdc, "Фон", int(body.Left)+18, bgTitleY, 100, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Фон", left, bgTitleY, 100, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	bgNames := []string{"Однотонный", "Сияние", "Сетка", "Звёзды", "Аврора", "Туманность"}
 	for i, r := range app.backgroundRects {
 		c := surfaceButtonColor()
@@ -3859,12 +4399,13 @@ func drawAppearanceSettings(hdc uintptr, body RECT) {
 		if hv > 0 && app.settings.Background != i && ui2d.active {
 			d2dDrawRoundedOutline(rv, 11, float32(1+0.4*hv), blendColor(theme.border, theme.accent2, .42))
 		}
-		drawText(hdc, bgNames[i], int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 11, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 		preview := RECT{r.Left + 8, r.Top + 7, r.Left + 38, r.Bottom - 7}
 		drawBackgroundSample(hdc, preview, i)
+		textLeft := int(preview.Right) + 7
+		drawText(hdc, bgNames[i], textLeft, int(r.Top), int(r.Right)-textLeft-7, int(r.Bottom-r.Top), 10, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	}
 	surfaceTitleY := int(maxRectBottom(app.backgroundRects[:])) + 8
-	drawText(hdc, "Области и панели", int(body.Left)+18, surfaceTitleY, 180, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Области и панели", left, surfaceTitleY, 180, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	sn := []string{"Классические", "Мягкие", "Акцентные", "Стеклянные", "Жидкое стекло"}
 	for i, r := range app.surfaceRects {
 		c := surfaceButtonColor()
@@ -3879,10 +4420,16 @@ func drawAppearanceSettings(hdc uintptr, body RECT) {
 		if hv > 0 && app.settings.SurfaceStyle != i && ui2d.active {
 			d2dDrawRoundedOutline(rv, 10, float32(1+0.4*hv), blendColor(theme.border, theme.accent2, .42))
 		}
-		drawText(hdc, sn[i], int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 11, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+		textW := int(r.Right-r.Left) - 20
+		textH := 16
+		if uiTextWidth(sn[i], 10, 650) > textW {
+			textH = 28
+		}
+		textY := int(r.Top) + (int(r.Bottom-r.Top)-textH)/2
+		drawText(hdc, sn[i], int(r.Left)+10, textY, textW, textH, 10, 650, theme.text, DT_CENTER|DT_WORDBREAK)
 	}
 	animTitleY := int(maxRectBottom(app.surfaceRects[:])) + 8
-	drawText(hdc, "Анимации", int(body.Left)+18, animTitleY, 130, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Анимации", left, animTitleY, 130, 18, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	an := []string{"Полные", "Умеренные", "Отключены"}
 	for i, r := range app.animationRects {
 		c := surfaceButtonColor()
@@ -3988,8 +4535,9 @@ func drawStatisticsSettings(hdc uintptr, body RECT) {
 		}
 	}
 	baseY := app.settingsContentTop + 8
-	innerLeft := int(body.Left) + 18
-	innerW := int(body.Right-body.Left) - 36
+	innerLeft := app.settingsContentLeft
+	innerRight := int(body.Right) - 18
+	innerW := innerRight - innerLeft
 	gap := 12
 	cardW := (innerW - gap*2) / 3
 	vals := []struct {
@@ -4019,14 +4567,14 @@ func drawStatisticsSettings(hdc uintptr, body RECT) {
 	for i, n := range names {
 		y := chartY + 30 + i*30
 		drawText(hdc, n, innerLeft, y, 120, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-		track := RECT{int32(innerLeft + 128), int32(y + 5), int32(int(body.Right) - 90), int32(y + 13)}
+		track := RECT{int32(innerLeft + 128), int32(y + 5), int32(innerRight - 54), int32(y + 13)}
 		roundFill(hdc, track, surfaceButtonColor(), 4)
 		if actions[i] > 0 {
 			fillR := track
 			fillR.Right = track.Left + int32(float64(track.Right-track.Left)*float64(actions[i])/float64(maxV))
 			roundFill(hdc, fillR, theme.accent, 4)
 		}
-		drawText(hdc, fmt.Sprint(actions[i]), int(body.Right)-78, y, 50, 18, 11, 650, theme.text, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, fmt.Sprint(actions[i]), innerRight-44, y, 44, 18, 11, 650, theme.text, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 	}
 }
 
@@ -4060,8 +4608,8 @@ func drawSettingsActionCard(hdc uintptr, r RECT, title, sub string) {
 	if hv > 0 && ui2d.active {
 		d2dDrawRoundedOutline(rv, 12, float32(1+0.4*hv), blendColor(theme.border, theme.accent2, .42))
 	}
-	drawText(hdc, title, int(r.Left)+14, int(r.Top)+8, int(r.Right-r.Left)-28, 19, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	drawText(hdc, sub, int(r.Left)+14, int(r.Top)+28, int(r.Right-r.Left)-28, int(r.Bottom-r.Top)-34, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK|DT_END_ELLIPSIS)
+	drawText(hdc, title, int(r.Left)+16, int(r.Top)+9, int(r.Right-r.Left)-32, 34, 11, 650, theme.text, DT_LEFT|DT_WORDBREAK)
+	drawText(hdc, sub, int(r.Left)+16, int(r.Top)+45, int(r.Right-r.Left)-32, int(r.Bottom-r.Top)-53, 9, 400, theme.muted, DT_LEFT|DT_WORDBREAK|DT_END_ELLIPSIS)
 }
 
 func drawSettingsUpdateCard(hdc uintptr, r, action RECT, title, sub, actionLabel string, busy bool) {
@@ -4076,11 +4624,36 @@ func drawSettingsUpdateCard(hdc uintptr, r, action RECT, title, sub, actionLabel
 	textW := max(90, textRight-int(r.Left)-14)
 	drawText(hdc, title, int(r.Left)+14, int(r.Top)+10, textW, 21, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	drawText(hdc, sub, int(r.Left)+14, int(r.Top)+34, textW, int(r.Bottom-r.Top)-42, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK|DT_END_ELLIPSIS)
-	if busy {
-		drawDisabledButton(hdc, action, actionLabel)
-	} else {
-		drawButton(hdc, action, actionLabel, false)
+	drawUpdateActionButton(hdc, action, actionLabel, busy)
+}
+
+func drawUpdateActionButton(hdc uintptr, r RECT, label string, disabled bool) {
+	if r.Right <= r.Left || r.Bottom <= r.Top {
+		return
 	}
+	h := 0.0
+	if !disabled {
+		h = hoverAmount(r)
+	}
+	rv := expandRect(r, int32(4*h+.5))
+	c := surfaceButtonColor()
+	if disabled {
+		c = blendColor(c, theme.panel, .35)
+	} else if h > 0 {
+		c = blendColor(c, theme.accent2, .08*h)
+	}
+	roundFill(hdc, rv, c, 10)
+	if h > 0 && ui2d.active {
+		d2dDrawRoundedOutline(rv, 10, float32(1+0.5*h), blendColor(theme.border, theme.accent2, .50))
+	}
+	if label == "Проверить обновление" {
+		label = "Проверить\nобновление"
+	}
+	color := theme.text
+	if disabled {
+		color = blendColor(theme.muted, theme.panel, .20)
+	}
+	drawText(hdc, label, int(r.Left)+8, int(r.Top)+3, int(r.Right-r.Left)-16, int(r.Bottom-r.Top)-6, 10, 650, color, DT_CENTER|DT_VCENTER|DT_WORDBREAK)
 }
 
 func drawComponentsSettings(hdc uintptr, body RECT) {
@@ -4090,11 +4663,10 @@ func drawComponentsSettings(hdc uintptr, body RECT) {
 	title, sub := powerPilotUpdateCard()
 	updateAction, updateBusy := powerPilotUpdateActionLabel()
 	drawSettingsUpdateCard(hdc, app.appUpdateRect, app.appUpdateActionRect, title, sub, updateAction, updateBusy)
-	textW := int(app.temperatureAutoUpdateRect.Right - app.temperatureAutoUpdateRect.Left)
-	drawText(hdc, "Проверка обновлений датчиков", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)-1, textW, 19, 11, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	drawText(hdc, "Автоматически при каждом запуске PowerPilot и затем каждые 30 минут. Установка найденного обновления запускается вручную и может запросить UAC.", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)+18, textW, 34, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
-	infoY := int(app.temperatureAutoUpdateRect.Bottom) + 36
-	drawText(hdc, "Аппаратные показатели в «Ресурсы → Продвинутый монитор → Датчики» появляются после установки провайдера. Температуры также используются в обычных карточках ресурсов; для низкоуровневого доступа CPU и платы применяется PawnIO.", int(app.temperatureAutoUpdateRect.Left), infoY, textW, 38, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
+	if temperatureProviderInstalled() {
+		textW := int(app.temperatureAutoUpdateRect.Right - app.temperatureAutoUpdateRect.Left)
+		drawText(hdc, "Датчики: «Ресурсы → Продвинутый монитор → Датчики».", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)+6, textW, 24, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	}
 }
 
 func drawSafetySettings(hdc uintptr, body RECT) {
@@ -4118,6 +4690,9 @@ func drawSafetySettings(hdc uintptr, body RECT) {
 }
 
 func currentScenarioConditions() []AutomationCondition {
+	if n := selectedGraphNode(); n != nil && (n.Kind == graphNodeTrigger || n.Kind == graphNodeCondition) {
+		return n.Conditions
+	}
 	if app.scenarioSavedDraft {
 		return app.savedEditDraft.Conditions
 	}
@@ -4229,12 +4804,20 @@ func conditionGroupWouldCycle(conds []AutomationCondition, groupID, parentID str
 	return false
 }
 func currentScenarioSteps() []ActionStep {
+	if n := selectedGraphNode(); n != nil && n.Kind == graphNodeAction {
+		return n.Steps
+	}
 	if app.scenarioSavedDraft {
 		return app.savedEditDraft.Steps
 	}
 	return app.settings.ActionSteps
 }
 func setCurrentScenarioConditions(v []AutomationCondition) {
+	if n := selectedGraphNode(); n != nil && (n.Kind == graphNodeTrigger || n.Kind == graphNodeCondition) {
+		n.Conditions = v
+		persistCurrentScenarioGraph()
+		return
+	}
 	if app.scenarioSavedDraft {
 		app.savedEditDraft.Conditions = v
 	} else {
@@ -4243,6 +4826,11 @@ func setCurrentScenarioConditions(v []AutomationCondition) {
 	}
 }
 func setCurrentScenarioSteps(v []ActionStep) {
+	if n := selectedGraphNode(); n != nil && n.Kind == graphNodeAction {
+		n.Steps = v
+		persistCurrentScenarioGraph()
+		return
+	}
 	if app.scenarioSavedDraft {
 		app.savedEditDraft.Steps = v
 	} else {
@@ -4277,18 +4865,30 @@ func setCurrentScenarioTriggerLogic(v int) {
 	}
 }
 func currentScenarioMode() int {
+	if tr := ensureCurrentScenarioGraph().trigger(); tr != nil {
+		return tr.Mode
+	}
 	if app.scenarioSavedDraft {
 		return app.savedEditDraft.Mode
 	}
 	return app.selectedMode
 }
 func currentScenarioAction() int {
+	if n := selectedGraphNode(); n != nil && n.Kind == graphNodeFinish {
+		return n.Action
+	}
 	if app.scenarioSavedDraft {
 		return app.savedEditDraft.Action
 	}
 	return app.selectedAction
 }
 func currentScenarioRecurrence() RecurrenceSpec {
+	if n := selectedGraphNode(); n != nil && n.Kind == graphNodeTrigger {
+		return n.Recurrence
+	}
+	if tr := ensureCurrentScenarioGraph().trigger(); tr != nil {
+		return tr.Recurrence
+	}
 	if app.scenarioSavedDraft {
 		return app.savedEditDraft.Recurrence
 	}
@@ -4309,6 +4909,10 @@ func loadScenarioWhenInputs() {
 	pSetWindowTextW.Call(app.edits[idScheduleTime], uintptr(unsafe.Pointer(wstr(t.Recurrence.TimeHHMM))))
 }
 func syncScenarioWhenFields() {
+	if currentScenarioGraphSession() != nil {
+		syncSelectedGraphTriggerFromFields()
+		return
+	}
 	if !app.scenarioSavedDraft {
 		syncFields()
 		return
@@ -4383,215 +4987,221 @@ func scenarioDragOffset(kind, idx int) int32 {
 }
 
 func drawScenarioPage(hdc uintptr, body RECT, w int) {
-	if app.scenarioBackRect.Right > app.scenarioBackRect.Left {
-		drawButton(hdc, app.scenarioBackRect, "← Назад", false)
+	if app.confirmDiscardScenario {
+		drawScenarioDiscardConfirm(hdc, body)
 	}
-	if !app.scenarioSavedDraft && undoAvailable040() {
-		drawButton(hdc, app.undoRect, "↶", false)
-	} else {
-		drawDisabledButton(hdc, app.undoRect, "↶")
-	}
-	if !app.scenarioSavedDraft && redoAvailable040() {
-		drawButton(hdc, app.redoRect, "↷", false)
-	} else {
-		drawDisabledButton(hdc, app.redoRect, "↷")
-	}
-	drawButton(hdc, app.previewRect, "Просмотр", false)
-	titleX := int(app.redoRect.Right) + 16
-	if titleX < int(body.Left)+18 {
-		titleX = int(body.Left) + 18
-	}
-	titleW := int(app.previewRect.Left) - titleX - 14
-	// Never force the heading wider than the actual free space. The previous
-	// 160px minimum made it paint under the trigger-logic button on narrow windows.
-	if titleW >= 72 {
-		drawText(hdc, "Схема задачи", titleX, int(body.Top)+18, titleW, 28, 18, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	}
-
-	if app.scenarioSavedDraft && app.section == 13 {
-		drawText(hdc, "Название", int(app.savedScenarioNameRect.Left), int(app.savedScenarioNameRect.Top)-18, int(app.savedScenarioNameRect.Right-app.savedScenarioNameRect.Left), 16, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-		roundFill(hdc, app.savedScenarioNameRect, surfaceButtonColor(), 9)
-		drawButton(hdc, app.savedScenarioSaveRect, "Сохранить", true)
-		drawButton(hdc, app.savedScenarioCancelRect, "Отмена", false)
-		drawButton(hdc, app.savedScenarioCheckRect, "Проверка", false)
-	}
-
-	// Primary trigger node.
-	r := app.blockWhenRect
-	rv, hv := hoverCardRect(r)
-	c := blendColor(surfaceButtonColor(), theme.accent, .16)
-	if hv > 0 {
-		c = blendColor(c, theme.accent2, .08*hv)
-	}
-	roundFill(hdc, rv, c, 13)
-	if hv > 0 && ui2d.active {
-		d2dDrawRoundedOutline(rv, 13, float32(1+.35*hv), blendColor(theme.border, theme.accent2, .44))
-	}
-	drawText(hdc, "КОГДА", int(r.Left)+14, int(r.Top)+6, int(r.Right-r.Left)-28, 14, 9, 700, theme.accent2, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc, currentScenarioWhenSummary(), int(r.Left)+14, int(r.Top)+21, int(r.Right-r.Left)-28, 24, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-
-	innerLeft := int(body.Left) + 18
-	innerW := int(body.Right-body.Left) - 36
-	colGap := 18
-	colW := (innerW - colGap) / 2
-	rightX := innerLeft + colW + colGap
-	listTitleY := int(app.blockWhenRect.Bottom) + 12
-	// Connector from trigger into both branches.
-	midX := (app.blockWhenRect.Left + app.blockWhenRect.Right) / 2
-	roundFill(hdc, RECT{midX - 1, app.blockWhenRect.Bottom, midX + 1, int32(listTitleY - 3)}, blendColor(theme.border, theme.accent2, .40), 1)
-	drawText(hdc, "↓", int(midX)-10, listTitleY-11, 20, 18, 12, 650, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc, "УСЛОВИЯ", innerLeft, listTitleY, colW, 18, 10, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc, "ДЕЙСТВИЯ", rightX, listTitleY, colW, 18, 10, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-
-	conds := currentScenarioConditions()
-	steps := currentScenarioSteps()
-	if ui2d.active && app.scenarioListClip.Right > app.scenarioListClip.Left {
-		d2dPushClip(app.scenarioListClip)
-	}
-	for i, baseR := range app.conditionRows {
-		dataIdx := app.conditionRowIndices[i]
-		if dataIdx < 0 || dataIdx >= len(conds) || baseR.Right <= baseR.Left {
-			continue
+	return
+	/*
+		if app.scenarioBackRect.Right > app.scenarioBackRect.Left {
+			drawButton(hdc, app.scenarioBackRect, "← Назад", false)
 		}
-		dy := scenarioDragOffset(1, dataIdx)
-		r := offsetRectXY(baseR, 0, dy)
-		dragR := offsetRectXY(app.conditionDragRects[i], 0, dy)
-		logicR := offsetRectXY(app.conditionLogicRects[i], 0, dy)
-		delR := offsetRectXY(app.conditionDeleteRects[i], 0, dy)
-		dupR := offsetRectXY(app.conditionDuplicateRects[i], 0, dy)
-		cnd := conds[dataIdx]
-		depth := scenarioConditionDepth(conds, dataIdx)
-		for level := 0; level < depth; level++ {
-			branchX := app.scenarioListClip.Left + 7 + int32(level*12)
-			branchColor := blendColor(theme.border, theme.accent2, .48)
-			d2dDrawLine(float32(branchX), float32(r.Top-4), float32(branchX), float32(r.Bottom), 1.1, branchColor)
-			d2dDrawLine(float32(branchX), float32((r.Top+r.Bottom)/2), float32(r.Left+4), float32((r.Top+r.Bottom)/2), 1.1, branchColor)
+		if !app.scenarioSavedDraft && undoAvailable040() {
+			drawButton(hdc, app.undoRect, "↶", false)
+		} else {
+			drawDisabledButton(hdc, app.undoRect, "↶")
 		}
+		if !app.scenarioSavedDraft && redoAvailable040() {
+			drawButton(hdc, app.redoRect, "↷", false)
+		} else {
+			drawDisabledButton(hdc, app.redoRect, "↷")
+		}
+		drawButton(hdc, app.previewRect, "Просмотр", false)
+		titleX := int(app.redoRect.Right) + 16
+		if titleX < int(body.Left)+18 {
+			titleX = int(body.Left) + 18
+		}
+		titleW := int(app.previewRect.Left) - titleX - 14
+		// Never force the heading wider than the actual free space. The previous
+		// 160px minimum made it paint under the trigger-logic button on narrow windows.
+		if titleW >= 72 {
+			drawText(hdc, "Схема задачи", titleX, int(body.Top)+18, titleW, 28, 18, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		}
+
+		if app.scenarioSavedDraft && app.section == 13 {
+			drawText(hdc, "Название", int(app.savedScenarioNameRect.Left), int(app.savedScenarioNameRect.Top)-18, int(app.savedScenarioNameRect.Right-app.savedScenarioNameRect.Left), 16, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+			roundFill(hdc, app.savedScenarioNameRect, surfaceButtonColor(), 9)
+			drawButton(hdc, app.savedScenarioSaveRect, "Сохранить", true)
+			drawButton(hdc, app.savedScenarioCancelRect, "Отмена", false)
+			drawButton(hdc, app.savedScenarioCheckRect, "Проверка", false)
+		}
+
+		// Primary trigger node.
+		r := app.blockWhenRect
 		rv, hv := hoverCardRect(r)
-		cc := surfaceButtonColor()
-		if cnd.Type == condGroup {
-			cc = blendColor(cc, theme.accent, .18)
-		}
+		c := blendColor(surfaceButtonColor(), theme.accent, .16)
 		if hv > 0 {
-			cc = blendColor(cc, theme.accent2, .06*hv)
+			c = blendColor(c, theme.accent2, .08*hv)
 		}
-		roundFill(hdc, rv, cc, 10)
-		if app.draggingScenarioKind == 1 && app.draggingScenarioIntoGroup && app.draggingScenarioTarget == dataIdx && ui2d.active {
-			d2dDrawRoundedOutline(rv, 10, 2, theme.accent2)
+		roundFill(hdc, rv, c, 13)
+		if hv > 0 && ui2d.active {
+			d2dDrawRoundedOutline(rv, 13, float32(1+.35*hv), blendColor(theme.border, theme.accent2, .44))
 		}
-		if cnd.Type == condGroup {
-			arrow := "▾"
-			if app.conditionGroupCollapsed[cnd.ID] {
-				arrow = "▸"
+		drawText(hdc, "КОГДА", int(r.Left)+14, int(r.Top)+6, int(r.Right-r.Left)-28, 14, 9, 700, theme.accent2, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, currentScenarioWhenSummary(), int(r.Left)+14, int(r.Top)+21, int(r.Right-r.Left)-28, 24, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+
+		innerLeft := int(body.Left) + 18
+		innerW := int(body.Right-body.Left) - 36
+		colGap := 18
+		colW := (innerW - colGap) / 2
+		rightX := innerLeft + colW + colGap
+		listTitleY := int(app.blockWhenRect.Bottom) + 12
+		// Connector from trigger into both branches.
+		midX := (app.blockWhenRect.Left + app.blockWhenRect.Right) / 2
+		roundFill(hdc, RECT{midX - 1, app.blockWhenRect.Bottom, midX + 1, int32(listTitleY - 3)}, blendColor(theme.border, theme.accent2, .40), 1)
+		drawText(hdc, "↓", int(midX)-10, listTitleY-11, 20, 18, 12, 650, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "УСЛОВИЯ", innerLeft, listTitleY, colW, 18, 10, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "ДЕЙСТВИЯ", rightX, listTitleY, colW, 18, 10, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+
+		conds := currentScenarioConditions()
+		steps := currentScenarioSteps()
+		if ui2d.active && app.scenarioListClip.Right > app.scenarioListClip.Left {
+			d2dPushClip(app.scenarioListClip)
+		}
+		for i, baseR := range app.conditionRows {
+			dataIdx := app.conditionRowIndices[i]
+			if dataIdx < 0 || dataIdx >= len(conds) || baseR.Right <= baseR.Left {
+				continue
 			}
-			collapseR := offsetRectXY(app.conditionCollapseRects[i], 0, dy)
-			drawText(hdc, arrow, int(collapseR.Left), int(collapseR.Top), int(collapseR.Right-collapseR.Left), int(collapseR.Bottom-collapseR.Top), 13, 700, theme.accent2, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-		}
-		drawText(hdc, "≡", int(dragR.Left), int(dragR.Top), int(dragR.Right-dragR.Left), int(dragR.Bottom-dragR.Top), 14, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-		textX := int(r.Left) + 38
-		if dataIdx > 0 {
-			logic := "И"
-			if cnd.Logic == logicOR {
-				logic = "ИЛИ"
+			dy := scenarioDragOffset(1, dataIdx)
+			r := offsetRectXY(baseR, 0, dy)
+			dragR := offsetRectXY(app.conditionDragRects[i], 0, dy)
+			logicR := offsetRectXY(app.conditionLogicRects[i], 0, dy)
+			delR := offsetRectXY(app.conditionDeleteRects[i], 0, dy)
+			dupR := offsetRectXY(app.conditionDuplicateRects[i], 0, dy)
+			cnd := conds[dataIdx]
+			depth := scenarioConditionDepth(conds, dataIdx)
+			for level := 0; level < depth; level++ {
+				branchX := app.scenarioListClip.Left + 7 + int32(level*12)
+				branchColor := blendColor(theme.border, theme.accent2, .48)
+				d2dDrawLine(float32(branchX), float32(r.Top-4), float32(branchX), float32(r.Bottom), 1.1, branchColor)
+				d2dDrawLine(float32(branchX), float32((r.Top+r.Bottom)/2), float32(r.Left+4), float32((r.Top+r.Bottom)/2), 1.1, branchColor)
 			}
-			drawOutlinedButton(hdc, logicR, logic, theme.accent2)
-			textX = int(logicR.Right) + 6
+			rv, hv := hoverCardRect(r)
+			cc := surfaceButtonColor()
+			if cnd.Type == condGroup {
+				cc = blendColor(cc, theme.accent, .18)
+			}
+			if hv > 0 {
+				cc = blendColor(cc, theme.accent2, .06*hv)
+			}
+			roundFill(hdc, rv, cc, 10)
+			if app.draggingScenarioKind == 1 && app.draggingScenarioIntoGroup && app.draggingScenarioTarget == dataIdx && ui2d.active {
+				d2dDrawRoundedOutline(rv, 10, 2, theme.accent2)
+			}
+			if cnd.Type == condGroup {
+				arrow := "▾"
+				if app.conditionGroupCollapsed[cnd.ID] {
+					arrow = "▸"
+				}
+				collapseR := offsetRectXY(app.conditionCollapseRects[i], 0, dy)
+				drawText(hdc, arrow, int(collapseR.Left), int(collapseR.Top), int(collapseR.Right-collapseR.Left), int(collapseR.Bottom-collapseR.Top), 13, 700, theme.accent2, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+			}
+			drawText(hdc, "≡", int(dragR.Left), int(dragR.Top), int(dragR.Right-dragR.Left), int(dragR.Bottom-dragR.Top), 14, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+			textX := int(r.Left) + 38
+			if dataIdx > 0 {
+				logic := "И"
+				if cnd.Logic == logicOR {
+					logic = "ИЛИ"
+				}
+				drawOutlinedButton(hdc, logicR, logic, theme.accent2)
+				textX = int(logicR.Right) + 6
+			}
+			label := conditionSummary(cnd)
+			if cnd.Type == condGroup {
+				label = fmt.Sprintf("Составное условие · %d", scenarioGroupDescendantCount(conds, cnd.ID))
+			}
+			drawText(hdc, label, textX, int(r.Top), int(r.Right)-textX-66, int(r.Bottom-r.Top), 10, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+			drawScenarioIconButton(hdc, dupR, scenarioIconCopy)
+			drawScenarioIconButton(hdc, delR, scenarioIconDelete)
+			if i+1 < len(app.conditionRows) && app.conditionRowIndices[i+1] == dataIdx+1 && app.conditionRows[i+1].Right > app.conditionRows[i+1].Left {
+				nextIdx := app.conditionRowIndices[i+1]
+				nextR := offsetRectXY(app.conditionRows[i+1], 0, scenarioDragOffset(1, nextIdx))
+				cx := (r.Left + r.Right) / 2
+				roundFill(hdc, RECT{cx - 1, r.Bottom, cx + 1, nextR.Top}, blendColor(theme.border, theme.accent2, .35), 1)
+			}
 		}
-		label := conditionSummary(cnd)
-		if cnd.Type == condGroup {
-			label = fmt.Sprintf("Составное условие · %d", scenarioGroupDescendantCount(conds, cnd.ID))
+		for i, baseR := range app.stepRows {
+			dataIdx := app.stepRowIndices[i]
+			if dataIdx < 0 || dataIdx >= len(steps) || baseR.Right <= baseR.Left {
+				continue
+			}
+			dy := scenarioDragOffset(2, dataIdx)
+			r := offsetRectXY(baseR, 0, dy)
+			dragR := offsetRectXY(app.stepDragRects[i], 0, dy)
+			delR := offsetRectXY(app.stepDeleteRects[i], 0, dy)
+			dupR := offsetRectXY(app.stepDuplicateRects[i], 0, dy)
+			st := steps[dataIdx]
+			rv, hv := hoverCardRect(r)
+			cc := surfaceButtonColor()
+			if hv > 0 {
+				cc = blendColor(cc, theme.accent2, .06*hv)
+			}
+			roundFill(hdc, rv, cc, 10)
+			drawText(hdc, "≡", int(dragR.Left), int(dragR.Top), int(dragR.Right-dragR.Left), int(dragR.Bottom-dragR.Top), 15, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+			drawText(hdc, stepSummary(st), int(r.Left)+38, int(r.Top), int(r.Right-r.Left)-100, int(r.Bottom-r.Top), 10, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+			drawScenarioIconButton(hdc, dupR, scenarioIconCopy)
+			drawScenarioIconButton(hdc, delR, scenarioIconDelete)
+			if i+1 < len(app.stepRows) && app.stepRowIndices[i+1] == dataIdx+1 && app.stepRows[i+1].Right > app.stepRows[i+1].Left {
+				nextIdx := app.stepRowIndices[i+1]
+				nextR := offsetRectXY(app.stepRows[i+1], 0, scenarioDragOffset(2, nextIdx))
+				cx := (r.Left + r.Right) / 2
+				roundFill(hdc, RECT{cx - 1, r.Bottom, cx + 1, nextR.Top}, blendColor(theme.border, theme.accent2, .35), 1)
+			}
 		}
-		drawText(hdc, label, textX, int(r.Top), int(r.Right)-textX-66, int(r.Bottom-r.Top), 10, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		drawScenarioIconButton(hdc, dupR, scenarioIconCopy)
-		drawScenarioIconButton(hdc, delR, scenarioIconDelete)
-		if i+1 < len(app.conditionRows) && app.conditionRowIndices[i+1] == dataIdx+1 && app.conditionRows[i+1].Right > app.conditionRows[i+1].Left {
-			nextIdx := app.conditionRowIndices[i+1]
-			nextR := offsetRectXY(app.conditionRows[i+1], 0, scenarioDragOffset(1, nextIdx))
-			cx := (r.Left + r.Right) / 2
-			roundFill(hdc, RECT{cx - 1, r.Bottom, cx + 1, nextR.Top}, blendColor(theme.border, theme.accent2, .35), 1)
+		if ui2d.active && app.scenarioListClip.Right > app.scenarioListClip.Left {
+			d2dPopClip()
 		}
-	}
-	for i, baseR := range app.stepRows {
-		dataIdx := app.stepRowIndices[i]
-		if dataIdx < 0 || dataIdx >= len(steps) || baseR.Right <= baseR.Left {
-			continue
-		}
-		dy := scenarioDragOffset(2, dataIdx)
-		r := offsetRectXY(baseR, 0, dy)
-		dragR := offsetRectXY(app.stepDragRects[i], 0, dy)
-		delR := offsetRectXY(app.stepDeleteRects[i], 0, dy)
-		dupR := offsetRectXY(app.stepDuplicateRects[i], 0, dy)
-		st := steps[dataIdx]
-		rv, hv := hoverCardRect(r)
-		cc := surfaceButtonColor()
+		drawScrollBar(hdc, app.scenarioScrollTrack, app.scenarioScrollThumb)
+		drawButton(hdc, app.addConditionRect, "+ Условие", false)
+		drawButton(hdc, app.addConditionGroupRect, "Составное условие", false)
+		drawScenarioIconButton(hdc, app.pasteConditionRect, scenarioIconPaste)
+		drawScenarioIconButton(hdc, app.copyConditionsGroupRect, scenarioIconPasteAll)
+		drawButton(hdc, app.addStepRect, "+ Шаг", false)
+		drawScenarioIconButton(hdc, app.pasteStepRect, scenarioIconPaste)
+		drawScenarioIconButton(hdc, app.copyStepsGroupRect, scenarioIconPasteAll)
+
+		// Both branches converge into the final power action.
+		fr := app.blockActionRect
+		rv, hv = hoverCardRect(fr)
+		fc := blendColor(surfaceButtonColor(), theme.accent, .16)
 		if hv > 0 {
-			cc = blendColor(cc, theme.accent2, .06*hv)
+			fc = blendColor(fc, theme.accent2, .08*hv)
 		}
-		roundFill(hdc, rv, cc, 10)
-		drawText(hdc, "≡", int(dragR.Left), int(dragR.Top), int(dragR.Right-dragR.Left), int(dragR.Bottom-dragR.Top), 15, 700, theme.muted, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-		drawText(hdc, stepSummary(st), int(r.Left)+38, int(r.Top), int(r.Right-r.Left)-100, int(r.Bottom-r.Top), 10, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		drawScenarioIconButton(hdc, dupR, scenarioIconCopy)
-		drawScenarioIconButton(hdc, delR, scenarioIconDelete)
-		if i+1 < len(app.stepRows) && app.stepRowIndices[i+1] == dataIdx+1 && app.stepRows[i+1].Right > app.stepRows[i+1].Left {
-			nextIdx := app.stepRowIndices[i+1]
-			nextR := offsetRectXY(app.stepRows[i+1], 0, scenarioDragOffset(2, nextIdx))
-			cx := (r.Left + r.Right) / 2
-			roundFill(hdc, RECT{cx - 1, r.Bottom, cx + 1, nextR.Top}, blendColor(theme.border, theme.accent2, .35), 1)
-		}
-	}
-	if ui2d.active && app.scenarioListClip.Right > app.scenarioListClip.Left {
-		d2dPopClip()
-	}
-	drawScrollBar(hdc, app.scenarioScrollTrack, app.scenarioScrollThumb)
-	drawButton(hdc, app.addConditionRect, "+ Условие", false)
-	drawButton(hdc, app.addConditionGroupRect, "Составное условие", false)
-	drawScenarioIconButton(hdc, app.pasteConditionRect, scenarioIconPaste)
-	drawScenarioIconButton(hdc, app.copyConditionsGroupRect, scenarioIconPasteAll)
-	drawButton(hdc, app.addStepRect, "+ Шаг", false)
-	drawScenarioIconButton(hdc, app.pasteStepRect, scenarioIconPaste)
-	drawScenarioIconButton(hdc, app.copyStepsGroupRect, scenarioIconPasteAll)
+		roundFill(hdc, rv, fc, 13)
+		drawText(hdc, "ФИНАЛЬНОЕ ДЕЙСТВИЕ", int(fr.Left)+12, int(fr.Top)+5, int(fr.Right-fr.Left)-24, 13, 8, 700, theme.accent2, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, currentScenarioActionSummary(), int(fr.Left)+12, int(fr.Top)+19, int(fr.Right-fr.Left)-24, 22, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 
-	// Both branches converge into the final power action.
-	fr := app.blockActionRect
-	rv, hv = hoverCardRect(fr)
-	fc := blendColor(surfaceButtonColor(), theme.accent, .16)
-	if hv > 0 {
-		fc = blendColor(fc, theme.accent2, .08*hv)
-	}
-	roundFill(hdc, rv, fc, 13)
-	drawText(hdc, "ФИНАЛЬНОЕ ДЕЙСТВИЕ", int(fr.Left)+12, int(fr.Top)+5, int(fr.Right-fr.Left)-24, 13, 8, 700, theme.accent2, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc, currentScenarioActionSummary(), int(fr.Left)+12, int(fr.Top)+19, int(fr.Right-fr.Left)-24, 22, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-
-	if app.draggingScenarioKind != 0 && ui2d.active {
-		var base RECT
-		if app.draggingScenarioKind == 1 {
-			for slot, idx := range app.conditionRowIndices {
-				if idx == app.draggingScenarioIndex {
-					base = app.conditionRows[slot]
-					break
+		if app.draggingScenarioKind != 0 && ui2d.active {
+			var base RECT
+			if app.draggingScenarioKind == 1 {
+				for slot, idx := range app.conditionRowIndices {
+					if idx == app.draggingScenarioIndex {
+						base = app.conditionRows[slot]
+						break
+					}
+				}
+			} else if app.draggingScenarioKind == 2 {
+				for slot, idx := range app.stepRowIndices {
+					if idx == app.draggingScenarioIndex {
+						base = app.stepRows[slot]
+						break
+					}
 				}
 			}
-		} else if app.draggingScenarioKind == 2 {
-			for slot, idx := range app.stepRowIndices {
-				if idx == app.draggingScenarioIndex {
-					base = app.stepRows[slot]
-					break
+			if base.Right > base.Left {
+				if app.draggingScenarioKind == 1 && app.draggingScenarioParentID == "" {
+					x := app.scenarioListClip.Left + 3
+					d2dDrawLine(float32(x), float32(app.scenarioListClip.Top+4), float32(x), float32(app.scenarioListClip.Bottom-4), 2, theme.accent2)
 				}
+				hh := (base.Bottom - base.Top) / 2
+				cy := app.draggingScenarioY
+				ghost := RECT{base.Left, cy - hh, base.Right, cy + hh}
+				roundFill(hdc, ghost, blendColor(surfaceButtonColor(), theme.accent, .34), 10)
+				d2dDrawRoundedOutline(ghost, 10, 1.6, theme.accent2)
 			}
 		}
-		if base.Right > base.Left {
-			if app.draggingScenarioKind == 1 && app.draggingScenarioParentID == "" {
-				x := app.scenarioListClip.Left + 3
-				d2dDrawLine(float32(x), float32(app.scenarioListClip.Top+4), float32(x), float32(app.scenarioListClip.Bottom-4), 2, theme.accent2)
-			}
-			hh := (base.Bottom - base.Top) / 2
-			cy := app.draggingScenarioY
-			ghost := RECT{base.Left, cy - hh, base.Right, cy + hh}
-			roundFill(hdc, ghost, blendColor(surfaceButtonColor(), theme.accent, .34), 10)
-			d2dDrawRoundedOutline(ghost, 10, 1.6, theme.accent2)
-		}
-	}
-	drawScenarioTooltip(hdc, body)
+		drawScenarioTooltip(hdc, body)
+	*/
 	if app.confirmDiscardScenario {
 		drawScenarioDiscardConfirm(hdc, body)
 	}
@@ -4629,8 +5239,10 @@ func drawBlockActionEditor(hdc uintptr, body RECT, w int) {
 func drawBlockWhenEditor(hdc uintptr, body RECT, w int) {
 	drawButton(hdc, app.blockEditorBackRect, "← Назад", false)
 	drawButton(hdc, app.blockEditorDoneRect, "Готово", true)
-	drawText(hdc, "Когда запускать", int(body.Left)+146, int(body.Top)+18, int(body.Right-body.Left)-300, 28, 19, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	names := []string{"Таймер", "Дата и время", "Простой", "После процесса", "Расписание", "По условиям"}
+	drawText(hdc, "Условия", int(body.Left)+146, int(body.Top)+18, int(body.Right-body.Left)-300, 28, 19, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	drawSelectableButton(hdc, app.graphEditorTabRects[0], "Триггеры", true)
+	drawSelectableButton(hdc, app.graphEditorTabRects[1], "Условия", false)
+	names := []string{"Таймер", "Дата и время", "Простой", "После процесса", "Расписание", "Сразу"}
 	for i, r := range app.modeRects {
 		drawSelectableButton(hdc, r, names[i], app.selectedMode == i)
 	}
@@ -4647,13 +5259,15 @@ func drawBlockWhenEditor(hdc uintptr, body RECT, w int) {
 	case 4:
 		label = "Расписание"
 	case 5:
-		label = "Запуск определяется блоками условий ниже"
+		label = "Без задержки"
 	}
 	uiDrawWhenFieldChrome(hdc, app.selectedMode, app.modeRects[:6], body, label)
 	if app.selectedMode == 3 {
 		drawButton(hdc, app.pickRect, "Выбрать процесс", false)
 		proc := app.settings.WatchProcess
-		if app.scenarioSavedDraft {
+		if n := selectedGraphNode(); n != nil && n.Kind == graphNodeTrigger {
+			proc = n.Process
+		} else if app.scenarioSavedDraft {
 			proc = app.savedEditDraft.WatchProcess
 		}
 		if strings.TrimSpace(proc) != "" {
@@ -4915,8 +5529,23 @@ func shiftConditionEditorDynamicRects(dy int32) {
 	app.conditionDelayFieldRect = shiftRectY(app.conditionDelayFieldRect, dy)
 }
 
+func drawEditorFieldLabel(hdc uintptr, label string, field RECT, width int) {
+	if field.Right <= field.Left || field.Bottom <= field.Top {
+		return
+	}
+	if width <= 0 {
+		width = int(field.Right - field.Left)
+	}
+	// One baseline for every editor field: a 16 px label with a fixed 4 px gap.
+	// Basing it on the actual control rect also keeps labels attached to controls
+	// while the expanded-condition form animates.
+	drawText(hdc, label, int(field.Left), int(field.Top)-20, width, 16, 10, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+}
+
 func drawConditionEditor(hdc uintptr, body RECT, w int) {
 	drawText(hdc, "Условие сценария", int(body.Left)+18, int(body.Top)+16, int(body.Right-body.Left)-36, 28, 19, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+	drawSelectableButton(hdc, app.graphEditorTabRects[0], "Триггеры", false)
+	drawSelectableButton(hdc, app.graphEditorTabRects[1], "Условия", true)
 	names := []string{"CPU", "GPU", "Сеть", "Диск", "Файл завершён", "Процесс завершён", "Окно есть", "Окно закрыто", "Окно активно", "Заголовок", "Нет звука", "Батарея", "Питание", "Свободно на диске", "Файлы в папке", "CPU процесса", "GPU процесса", "RAM процесса", "Интернет", "Полный экран", "Диск/устройство"}
 	basicSet := map[int]bool{condCPU: true, condGPU: true, condNetwork: true, condDisk: true, condFileStable: true, condProcessExit: true}
 	for i, r := range app.editorTypeRects {
@@ -4962,7 +5591,6 @@ func drawConditionEditor(hdc uintptr, body RECT, w int) {
 	// The controls below follow the animated expand button. Do not scan the full
 	// extra-condition geometry here: doing so made the form jump to its final
 	// expanded position on the first animation frame and caused visible blinking.
-	fieldY := int(app.conditionMoreRect.Bottom) + 6
 	if conditionUsesThreshold(app.conditionDraft.Type) {
 		thresholdLabel := "Порог"
 		switch app.conditionDraft.Type {
@@ -4977,9 +5605,9 @@ func drawConditionEditor(hdc uintptr, body RECT, w int) {
 		case condFolderCount:
 			thresholdLabel = "Количество"
 		}
-		drawText(hdc, thresholdLabel, int(body.Left)+18, fieldY, 120, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, thresholdLabel, app.whenFieldRect, 160)
 		roundFill(hdc, app.whenFieldRect, surfaceButtonColor(), 9)
-		drawText(hdc, "Непрерывно, сек", int(app.warningFieldRect.Left), fieldY, 130, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Непрерывно, сек", app.warningFieldRect, 160)
 		roundFill(hdc, app.warningFieldRect, surfaceButtonColor(), 9)
 		comps := []string{"≤", "≥"}
 		for i, r := range app.editorCompareRects {
@@ -4998,16 +5626,15 @@ func drawConditionEditor(hdc uintptr, body RECT, w int) {
 		} else if app.conditionDraft.Type == condDrivePresent {
 			label, leftOpt, rightOpt = "Диск / устройство", "Отключён", "Подключён"
 		}
-		drawText(hdc, label, int(body.Left)+18, fieldY, 200, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, label, app.editorCompareRects[0], 240)
 		drawSelectableButton(hdc, app.editorCompareRects[0], leftOpt, app.conditionDraft.Compare <= 0)
 		drawSelectableButton(hdc, app.editorCompareRects[1], rightOpt, app.conditionDraft.Compare > 0)
-		drawText(hdc, "Непрерывно, сек", int(app.warningFieldRect.Left), fieldY, 130, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Непрерывно, сек", app.warningFieldRect, 160)
 		roundFill(hdc, app.warningFieldRect, surfaceButtonColor(), 9)
 	} else {
-		drawText(hdc, "Непрерывно / стабильно, сек", int(app.warningFieldRect.Left), fieldY, 190, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Непрерывно / стабильно, сек", app.warningFieldRect, 220)
 		roundFill(hdc, app.warningFieldRect, surfaceButtonColor(), 9)
 	}
-	textY := fieldY + 66
 	label := "Путь к файлу или папке"
 	switch app.conditionDraft.Type {
 	case condProcessExit:
@@ -5033,7 +5660,7 @@ func drawConditionEditor(hdc uintptr, body RECT, w int) {
 			label = "Примечание (необязательно)"
 		}
 	}
-	drawText(hdc, label, int(body.Left)+18, textY, 260, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawEditorFieldLabel(hdc, label, app.timeFieldRects[0], max(260, int(app.timeFieldRects[0].Right-app.timeFieldRects[0].Left)))
 	roundFill(hdc, app.timeFieldRects[0], surfaceButtonColor(), 9)
 	if app.conditionDraft.Type == condFileStable {
 		drawButton(hdc, app.editorBrowseRect, "Обзор…", false)
@@ -5090,35 +5717,35 @@ func drawStepEditor(hdc uintptr, body RECT, w int) {
 	fieldY := int(app.stepTypeRects[9].Bottom) + 11
 	switch app.stepDraft.Type {
 	case stepCloseProcesses:
-		drawText(hdc, "Процессы этого шага", int(body.Left)+18, fieldY, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Процессы этого шага", app.editorBrowseRect, 220)
 		drawButton(hdc, app.editorBrowseRect, "Выбрать процессы", false)
 		drawText(hdc, processCountPhrase(len(app.stepDraft.Processes)), int(app.editorBrowseRect.Right)+12, int(app.editorBrowseRect.Top), max(100, int(body.Right-app.editorBrowseRect.Right)-28), int(app.editorBrowseRect.Bottom-app.editorBrowseRect.Top), 10, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	case stepWait:
-		drawText(hdc, "Секунды ожидания", int(body.Left)+18, fieldY, 180, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Секунды ожидания", app.whenFieldRect, 180)
 		if app.whenFieldRect.Right > app.whenFieldRect.Left {
 			roundFill(hdc, app.whenFieldRect, surfaceButtonColor(), 9)
 		}
 	case stepSetVolume, stepMute:
-		drawText(hdc, "Громкость", int(body.Left)+18, fieldY, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Громкость", app.powerPlanRects[0], 220)
 		audioModes := []string{"Задать %", "Выключить звук", "Включить звук"}
 		for i, rr := range app.powerPlanRects {
 			active := (i == 0 && app.stepDraft.Type == stepSetVolume) || (i == 1 && app.stepDraft.Type == stepMute && app.stepDraft.Value != 0) || (i == 2 && app.stepDraft.Type == stepMute && app.stepDraft.Value == 0)
 			drawSelectableButton(hdc, rr, audioModes[i], active)
 		}
 		if app.stepDraft.Type == stepSetVolume && app.whenFieldRect.Right > app.whenFieldRect.Left {
-			drawText(hdc, "Уровень, %", int(body.Left)+18, int(app.whenFieldRect.Top)-20, 120, 18, 10, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+			drawEditorFieldLabel(hdc, "Уровень, %", app.whenFieldRect, 120)
 			roundFill(hdc, app.whenFieldRect, surfaceButtonColor(), 9)
 		}
 	case stepLockWorkstation:
 		drawText(hdc, "Windows будет заблокирован, сценарий продолжит работу в фоне.", int(body.Left)+18, fieldY+20, int(body.Right-body.Left)-36, 36, 11, 500, theme.muted, DT_LEFT|DT_VCENTER)
 	case stepPowerPlan:
-		drawText(hdc, "План электропитания", int(body.Left)+18, fieldY, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "План электропитания", app.powerPlanRects[0], 220)
 		planNames := []string{"Энергосбережение", "Сбалансированный", "Высокая производительность"}
 		for i, rr := range app.powerPlanRects {
 			drawSelectableButton(hdc, rr, planNames[i], clampInt(app.stepDraft.Value, 0, 2) == i)
 		}
 	case stepProcessPriority:
-		drawText(hdc, "Процесс и приоритет", int(body.Left)+18, fieldY, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Процесс и приоритет", app.timeFieldRects[0], 220)
 		if app.timeFieldRects[0].Right > app.timeFieldRects[0].Left {
 			roundFill(hdc, app.timeFieldRects[0], surfaceButtonColor(), 9)
 		}
@@ -5128,7 +5755,7 @@ func drawStepEditor(hdc uintptr, body RECT, w int) {
 			drawSelectableButton(hdc, rr, prioNames[i], clampInt(app.stepDraft.Value, 0, 2) == i)
 		}
 	case stepRunCommand:
-		drawText(hdc, "Команда или программа", int(body.Left)+18, fieldY, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Команда или программа", app.timeFieldRects[0], 220)
 		if app.timeFieldRects[0].Right > app.timeFieldRects[0].Left {
 			roundFill(hdc, app.timeFieldRects[0], surfaceButtonColor(), 9)
 		}
@@ -5136,22 +5763,24 @@ func drawStepEditor(hdc uintptr, body RECT, w int) {
 			drawButton(hdc, app.editorBrowseRect, "Выбрать файл…", false)
 		}
 	case stepNotify:
-		drawText(hdc, "Текст уведомления", int(body.Left)+18, fieldY, 220, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawEditorFieldLabel(hdc, "Текст уведомления", app.timeFieldRects[0], 220)
 		if app.timeFieldRects[0].Right > app.timeFieldRects[0].Left {
 			roundFill(hdc, app.timeFieldRects[0], surfaceButtonColor(), 9)
 		}
 	}
 
-	drawText(hdc, "При ошибке", int(body.Left)+18, int(app.stepErrorRects[0].Top)-22, 150, 18, 11, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	errNames := []string{"Продолжить", "Остановить", "Повторить"}
-	for i, r := range app.stepErrorRects {
-		drawSelectableButton(hdc, r, errNames[i], app.stepDraft.OnError == i)
+	if app.settings.GraphShowErrorOptions {
+		drawEditorFieldLabel(hdc, "При ошибке", app.stepErrorRects[0], 150)
+		errNames := []string{"Продолжить", "Остановить", "Повторить"}
+		for i, r := range app.stepErrorRects {
+			drawSelectableButton(hdc, r, errNames[i], app.stepDraft.OnError == i)
+		}
 	}
-	if app.stepDraft.OnError == 2 {
-		drawText(hdc, "Повторов", int(app.stepRetryFieldRect.Left), int(app.stepRetryFieldRect.Top)-20, 90, 18, 10, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	if app.settings.GraphShowErrorOptions && app.stepDraft.OnError == 2 {
+		drawEditorFieldLabel(hdc, "Повторов", app.stepRetryFieldRect, 90)
 		roundFill(hdc, app.stepRetryFieldRect, surfaceButtonColor(), 8)
 	}
-	drawText(hdc, "Пауза после, сек", int(app.stepDelayFieldRect.Left), int(app.stepDelayFieldRect.Top)-20, 150, 18, 10, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawEditorFieldLabel(hdc, "Пауза после, сек", app.stepDelayFieldRect, 150)
 	roundFill(hdc, app.stepDelayFieldRect, surfaceButtonColor(), 8)
 	if reveal {
 		d2dResetTransform()
@@ -5188,7 +5817,7 @@ func drawHistorySettings(hdc uintptr, body RECT) {
 	roundFill(hdc, app.historySearchRect, surfaceButtonColor(), 9)
 	items := filteredHistoryItems()
 	if len(items) == 0 {
-		drawText(hdc, "По этому фильтру записей пока нет.", int(body.Left)+18, int(app.historyFilterRects[0].Bottom)+34, int(body.Right-body.Left)-36, 30, 12, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "По этому фильтру записей пока нет.", app.settingsContentLeft, int(app.historySearchRect.Bottom)+10, int(body.Right)-app.settingsContentLeft-18, 30, 12, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 		drawOutlinedButton(hdc, app.historyClearRect, "Очистить", theme.danger)
 		return
 	}
@@ -5729,6 +6358,8 @@ func queueSmoothScroll(wheelDelta int16) {
 	case app.section == 19:
 		maxPx := scrollMaxPx(6)
 		app.resourceProcScrollTarget = clampFloat(app.resourceProcScrollTarget-step, 0, maxPx)
+	case app.section == 20 && app.resourceStatsView >= 2:
+		app.resourceStatsListScrollTarget = clampFloat(app.resourceStatsListScrollTarget-step, 0, app.resourceStatsListScrollMax)
 	}
 }
 
@@ -5752,6 +6383,8 @@ func scrollMaxPx(kind int) float64 {
 		return app.settingsScrollMax
 	case 8:
 		return app.notificationScrollMax
+	case 9:
+		return app.resourceStatsListScrollMax
 	default:
 		return 0
 	}
@@ -5799,6 +6432,8 @@ func beginScrollbarInteraction(x, y int32) bool {
 		kind, track, thumb = 5, app.scenarioScrollTrack, app.scenarioScrollThumb
 	case app.section == 19:
 		kind, track, thumb = 6, app.resourceProcScrollTrack, app.resourceProcScrollThumb
+	case app.section == 20 && app.resourceStatsView >= 2 && app.resourceStatsListScrollMax > 0:
+		kind, track, thumb = 9, app.resourceStatsListScrollTrack, app.resourceStatsListScrollThumb
 	}
 	if kind == 0 || (!pointIn(track, x, y) && !pointIn(thumb, x, y)) {
 		return false
@@ -5806,7 +6441,7 @@ func beginScrollbarInteraction(x, y int32) bool {
 	if pointIn(thumb, x, y) {
 		app.draggingScrollKind = kind
 		app.dragScrollGrabOffset = float64(y - thumb.Top)
-		pSetCapture.Call(app.hwnd)
+		pSetCapture.Call(activeInteractionWindow())
 		return true
 	}
 	// Track click recenters the thumb and then smoothly glides there.
@@ -5833,6 +6468,8 @@ func setScrollTargetFromY(kind int, y, grabOffset float64) {
 		track, thumb = app.settingsScrollTrack, app.settingsScrollThumb
 	case 8:
 		track, thumb = app.notificationScrollTrack, app.notificationScrollThumb
+	case 9:
+		track, thumb = app.resourceStatsListScrollTrack, app.resourceStatsListScrollThumb
 	default:
 		return
 	}
@@ -5860,6 +6497,8 @@ func setScrollTargetFromY(kind int, y, grabOffset float64) {
 		app.settingsScrollTarget = target
 	case 8:
 		app.notificationScrollTarget = target
+	case 9:
+		app.resourceStatsListScrollTarget = target
 	}
 }
 
@@ -5885,9 +6524,18 @@ func dragScrollbarTo(y int32) {
 		app.settingsScrollPx = app.settingsScrollTarget
 	case 8:
 		app.notificationScrollPx = app.notificationScrollTarget
+	case 9:
+		app.resourceStatsListScrollPx = app.resourceStatsListScrollTarget
 	}
 	updateScrollGeometry()
-	invalidate(app.hwnd)
+	invalidate(activeInteractionWindow())
+}
+
+func activeInteractionWindow() uintptr {
+	if session := currentScenarioGraphSession(); session != nil && session.HWND != 0 {
+		return session.HWND
+	}
+	return app.hwnd
 }
 
 func updateScrollGeometry() {
@@ -6043,6 +6691,22 @@ func hoverAmount(r RECT) float64 {
 	}
 	k := rectHoverKey(r)
 	inside := pointIn(r, app.mouseX, app.mouseY)
+	if drawingDetachedGraphWindow {
+		if inside {
+			if app.graphHoverKey != k {
+				app.graphHoverKey = k
+				app.graphHoverRect = r
+				app.graphHoverAnim = .12
+			} else {
+				app.graphHoverRect = r
+			}
+		}
+		if app.graphHoverKey != k {
+			return 0
+		}
+		t := clampFloat(app.graphHoverAnim, 0, 1)
+		return t * t * (3 - 2*t)
+	}
 	if inside {
 		app.hoverSeen = true
 		if app.hoverKey != k {
@@ -6243,6 +6907,43 @@ func drawDeleteConfirmation(hdc uintptr, body RECT, task SavedTask) {
 	drawOutlinedButton(hdc, app.confirmDeleteYesRect, "Удалить", theme.danger)
 }
 
+func animateConditionCatalog() bool {
+	if !app.conditionCatalogAnimating {
+		return false
+	}
+	// Time-based catalogue animation. Geometry is recalculated from one authoritative
+	// progress value, but native EDIT HWNDs remain hidden for the whole transition.
+	duration := 360 * time.Millisecond
+	if app.settings.AnimationMode == 1 {
+		duration = 280 * time.Millisecond
+	}
+	if app.settings.AnimationMode == 2 {
+		duration = time.Millisecond
+	}
+	p := float64(time.Since(app.conditionCatalogStarted)) / float64(duration)
+	p = clampFloat(p, 0, 1)
+	// smootherstep: zero velocity and zero acceleration at both ends.
+	e := p * p * p * (p*(p*6-15) + 10)
+	app.conditionCatalogAnim = app.conditionCatalogFrom + (app.conditionCatalogTarget-app.conditionCatalogFrom)*e
+	if app.section == 8 || (app.graphWindow != 0 && app.graphEditorSection == 8) {
+		newTop := app.conditionCatalogBaseMoreY + int32(float64(app.conditionCatalogExtraFullH)*app.conditionCatalogAnim)
+		shiftConditionEditorDynamicRects(newTop - app.conditionMoreRect.Top)
+	}
+	if p >= 1 {
+		app.conditionCatalogAnim = app.conditionCatalogTarget
+		app.conditionCatalogAnimating = false
+		if app.section == 8 {
+			positionConditionEditorInputs(true)
+		}
+		if app.graphWindow != 0 && app.graphEditorSection == 8 {
+			// The next detached-window paint recalculates and applies final child
+			// positions in one pass; never move them through the legacy coordinates.
+			app.graphInputsNeedRepaint = true
+		}
+	}
+	return true
+}
+
 func animate() {
 	changed := false
 	for i := 0; i < 4; i++ {
@@ -6328,45 +7029,7 @@ func animate() {
 		}
 	}
 
-	if app.conditionCatalogAnimating {
-		// Time-based catalogue animation.  Geometry is recalculated from one authoritative
-		// progress value, but native EDIT HWNDs remain hidden for the whole transition.
-		// Together with the off-screen frame compositor this prevents both parent-surface
-		// tearing and child-HWND flashes.
-		duration := 360 * time.Millisecond
-		if app.settings.AnimationMode == 1 {
-			duration = 280 * time.Millisecond
-		}
-		if app.settings.AnimationMode == 2 {
-			duration = time.Millisecond
-		}
-		p := float64(time.Since(app.conditionCatalogStarted)) / float64(duration)
-		if p < 0 {
-			p = 0
-		}
-		if p > 1 {
-			p = 1
-		}
-		// smootherstep: zero velocity and zero acceleration at both ends.
-		e := p * p * p * (p*(p*6-15) + 10)
-		app.conditionCatalogAnim = app.conditionCatalogFrom + (app.conditionCatalogTarget-app.conditionCatalogFrom)*e
-		if app.section == 8 {
-			// Only the moving condition-editor geometry changes during the transition.
-			// Native EDITs were hidden once at animation start; repeatedly hiding them
-			// here caused the close-only flash on some Windows builds.
-			newTop := app.conditionCatalogBaseMoreY + int32(float64(app.conditionCatalogExtraFullH)*app.conditionCatalogAnim)
-			delta := newTop - app.conditionMoreRect.Top
-			shiftConditionEditorDynamicRects(delta)
-		}
-		if p >= 1 {
-			app.conditionCatalogAnim = app.conditionCatalogTarget
-			app.conditionCatalogAnimating = false
-			if app.section == 8 {
-				// Do not relayout the entire application on the terminal frame: that toggles
-				// every child HWND and was the remaining source of collapse flicker.
-				positionConditionEditorInputs(true)
-			}
-		}
+	if animateConditionCatalog() {
 		changed = true
 	}
 
@@ -6492,6 +7155,13 @@ func animate() {
 				app.resourceProcScrollPx = app.resourceProcScrollTarget
 			}
 			scrolled = old != app.resourceProcScrollPx
+		case app.section == 20 && app.resourceStatsView >= 2:
+			old := app.resourceStatsListScrollPx
+			app.resourceStatsListScrollPx += (app.resourceStatsListScrollTarget - app.resourceStatsListScrollPx) * scrollStep
+			if abs(app.resourceStatsListScrollPx-app.resourceStatsListScrollTarget) < .08 {
+				app.resourceStatsListScrollPx = app.resourceStatsListScrollTarget
+			}
+			scrolled = old != app.resourceStatsListScrollPx
 		case app.section == 5:
 			old := app.savedScrollPx
 			app.savedScrollPx += (app.savedScrollTarget - app.savedScrollPx) * scrollStep
@@ -6550,12 +7220,19 @@ func animate() {
 			shiftVisibleEditsForAnimation()
 			invalidateVisibleEdits()
 		}
-		invalidate(app.hwnd)
+		if app.graphWindow != 0 {
+			invalidateScenarioGraphWindows()
+		} else {
+			invalidate(app.hwnd)
+		}
 	}
 }
 
 func onMouseMove(hwnd uintptr, x, y int32) {
 	app.mouseX, app.mouseY = x, y
+	if handleScenarioGraphMouseMove(x, y) {
+		return
+	}
 	tooltipRect, tooltipText := scenarioTooltipAt(x, y)
 	if tooltipRect != app.tooltipRect || tooltipText != app.tooltipText {
 		app.tooltipRect = tooltipRect
@@ -6852,10 +7529,10 @@ func onClick(x, y int32) {
 	if app.miniMode {
 		if pointIn(app.miniCancelRect, x, y) {
 			playUI(clickSound)
-			cancelSchedule(true)
+			toggleActiveSchedulePaused()
 		} else if pointIn(app.miniPostponeRect, x, y) {
 			playUI(clickSound)
-			postpone10()
+			cancelSchedule(true)
 		}
 		return
 	}
@@ -7368,6 +8045,7 @@ func onClick(x, y int32) {
 			if pointIn(r, x, y) {
 				if app.resourceStatsView != i {
 					app.resourceStatsView = i
+					app.resourceStatsListScrollPx, app.resourceStatsListScrollTarget = 0, 0
 					app.resourceStatsSort = 0
 					app.resourceStatsSortDesc = false
 					if i < 3 && app.resourceStatsPeriod > 4 {
@@ -7408,6 +8086,14 @@ func onClick(x, y int32) {
 	}
 
 	if app.section == 3 {
+		if pointIn(app.settingsCompactTabsRect, x, y) {
+			app.settings.SettingsCompactTabs = !app.settings.SettingsCompactTabs
+			saveSettings()
+			playUI(clickSound)
+			layoutControls(app.hwnd)
+			invalidate(app.hwnd)
+			return
+		}
 		for i, r := range app.settingsTabs {
 			if pointIn(r, x, y) {
 				if app.settingsCategory == i {
@@ -7415,7 +8101,7 @@ func onClick(x, y int32) {
 				}
 				syncFields()
 				app.settingsCategory = i
-				pages := []int{0, 1, 6, 5, 4, 4, 2}
+				pages := []int{0, 1, 6, 5, 4, 4, 2, 8}
 				app.settingsSubpage = pages[i]
 				app.settingsScrollPx, app.settingsScrollTarget = 0, 0
 				app.confirmClearHistory = false
@@ -7434,8 +8120,8 @@ func onClick(x, y int32) {
 			}
 		}
 		if app.settingsCategory == 1 {
-			pages := []int{1, 7}
-			for i, r := range app.settingsSectionRects {
+			pages := []int{1, 7, 9}
+			for i, r := range app.settingsSectionRects[:len(pages)] {
 				if pointIn(r, x, y) && app.settingsSubpage != pages[i] {
 					app.settingsSubpage = pages[i]
 					app.settingsScrollPx, app.settingsScrollTarget = 0, 0
@@ -7448,7 +8134,7 @@ func onClick(x, y int32) {
 			}
 		} else if app.settingsCategory == 5 {
 			pages := []int{4, 3}
-			for i, r := range app.settingsSectionRects {
+			for i, r := range app.settingsSectionRects[:len(pages)] {
 				if pointIn(r, x, y) && app.settingsSubpage != pages[i] {
 					app.settingsSubpage = pages[i]
 					app.settingsScrollPx, app.settingsScrollTarget = 0, 0
@@ -7520,7 +8206,9 @@ func onClick(x, y int32) {
 			}
 			if pointIn(app.autoRect, x, y) {
 				app.settings.AutoStart = !app.settings.AutoStart
-				setAutoStart(app.settings.AutoStart)
+				if err := setAutoStart(app.settings.AutoStart); err != nil {
+					techLog040("autostart registration failed: " + err.Error())
+				}
 				saveSettings()
 				playUI(clickSound)
 				invalidate(app.hwnd)
@@ -7550,6 +8238,20 @@ func onClick(x, y int32) {
 				invalidate(app.hwnd)
 				return
 			}
+			if pointIn(app.minuteWarningRect, x, y) {
+				app.settings.TaskMinuteWarningNotification = !app.settings.TaskMinuteWarningNotification
+				saveSettings()
+				playUI(clickSound)
+				invalidate(app.hwnd)
+				return
+			}
+			if pointIn(app.notificationSoundsRect, x, y) {
+				app.settings.NotificationSounds = !app.settings.NotificationSounds
+				saveSettings()
+				playUI(clickSound)
+				invalidate(app.hwnd)
+				return
+			}
 			if pointIn(app.wakeScheduledRect, x, y) {
 				app.settings.WakeScheduledTasks = !app.settings.WakeScheduledTasks
 				syncFields()
@@ -7575,6 +8277,39 @@ func onClick(x, y int32) {
 				return
 			}
 		case 7:
+			for i, r := range app.networkRateUnitRects {
+				if pointIn(r, x, y) {
+					app.settings.NetworkRateBits = i == 1
+					saveSettings()
+					playUI(clickSound)
+					invalidate(app.hwnd)
+					return
+				}
+			}
+			for i, r := range app.graphWindowSizeRects {
+				if pointIn(r, x, y) {
+					app.settings.GraphWindowSize = i
+					widths, heights := []int{1280, 1440, 1600}, []int{820, 900, 960}
+					app.settings.GraphWindowWidth, app.settings.GraphWindowHeight = widths[i], heights[i]
+					setEditTextIfDifferent(idGraphWidth, strconv.Itoa(widths[i]))
+					setEditTextIfDifferent(idGraphHeight, strconv.Itoa(heights[i]))
+					saveSettings()
+					playUI(clickSound)
+					invalidate(app.hwnd)
+					return
+				}
+			}
+			if pointIn(app.graphWindowLockRect, x, y) {
+				applyGraphWindowSizeFields()
+				app.settings.GraphWindowSizeLocked = !app.settings.GraphWindowSizeLocked
+				saveSettings()
+				if app.graphWindow != 0 && app.settings.GraphWindowSizeLocked {
+					resizeScenarioGraphWindow(app.settings.GraphWindowWidth, app.settings.GraphWindowHeight)
+				}
+				playUI(clickSound)
+				invalidate(app.hwnd)
+				return
+			}
 			for i, r := range app.resourceTimelineModeRects {
 				if pointIn(r, x, y) {
 					app.settings.ResourceTimelineMode = i
@@ -7591,7 +8326,39 @@ func onClick(x, y int32) {
 				setTimelineTicksFromX(x)
 				return
 			}
-			if pointIn(app.miniAlwaysTopRect, x, y) {
+			scales := []int{90, 100, 110, 125}
+			for i, r := range app.uiScaleRects {
+				if pointIn(r, x, y) {
+					applyUIScaleChange040(scales[i])
+					playUI(clickSound)
+					return
+				}
+			}
+		case 8:
+			if pointIn(app.graphSettingsToggleRect, x, y) {
+				app.settings.GraphAutoRemoveSingleJunction = !app.settings.GraphAutoRemoveSingleJunction
+				saveSettings()
+				playUI(clickSound)
+				invalidateScenarioGraphWindows()
+				return
+			}
+			if pointIn(app.graphSettingsSnapRect, x, y) {
+				app.settings.GraphSnapToGrid = !app.settings.GraphSnapToGrid
+				saveSettings()
+				playUI(clickSound)
+				invalidateScenarioGraphWindows()
+				return
+			}
+			if pointIn(app.graphSettingsErrorRect, x, y) {
+				app.settings.GraphShowErrorOptions = !app.settings.GraphShowErrorOptions
+				saveSettings()
+				playUI(clickSound)
+				layoutControls(app.hwnd)
+				invalidateScenarioGraphWindows()
+				return
+			}
+		case 9:
+			if pointIn(app.miniDetailedTopRect, x, y) {
 				app.settings.AlwaysOnTopMini = !app.settings.AlwaysOnTopMini
 				saveSettings()
 				applyMiniTopmost040()
@@ -7599,47 +8366,23 @@ func onClick(x, y int32) {
 				invalidate(app.hwnd)
 				return
 			}
-			for i, r := range app.miniOptionRects {
-				if !pointIn(r, x, y) {
-					continue
+			for i, r := range app.miniDetailedOptionRects {
+				if pointIn(r, x, y) {
+					toggleMiniDetailedOption(i)
+					saveSettings()
+					playUI(clickSound)
+					invalidate(app.hwnd)
+					return
 				}
-				switch i {
-				case 0:
-					app.settings.MiniShowTask = !app.settings.MiniShowTask
-				case 1:
-					app.settings.MiniShowCountdown = !app.settings.MiniShowCountdown
-				case 2:
-					app.settings.MiniShowStep = !app.settings.MiniShowStep
-				case 3:
-					app.settings.MiniShowMetrics = !app.settings.MiniShowMetrics
-				}
-				saveSettings()
-				playUI(clickSound)
-				invalidate(app.hwnd)
-				return
 			}
 			sizeValues := []int{90, 100, 120}
 			for i, r := range app.miniSizeRects {
 				if pointIn(r, x, y) {
 					app.settings.MiniSize = sizeValues[i]
 					saveSettings()
-					if app.miniMode {
-						mw, mh := miniClientSize040()
-						var wr RECT
-						pGetWindowRect.Call(app.hwnd, uintptr(unsafe.Pointer(&wr)))
-						pSetWindowPos.Call(app.hwnd, 0, uintptr(wr.Left), uintptr(wr.Top), uintptr(mw), uintptr(mh), SWP_NOZORDER|SWP_NOACTIVATE)
-						layoutControls(app.hwnd)
-					}
+					resizeMiniWindowIfActive()
 					playUI(clickSound)
 					invalidate(app.hwnd)
-					return
-				}
-			}
-			scales := []int{90, 100, 110, 125}
-			for i, r := range app.uiScaleRects {
-				if pointIn(r, x, y) {
-					applyUIScaleChange040(scales[i])
-					playUI(clickSound)
 					return
 				}
 			}
@@ -8220,12 +8963,18 @@ func onClick(x, y int32) {
 		}
 		for i, r := range app.blockActionChoiceRects {
 			if pointIn(r, x, y) {
-				if app.scenarioSavedDraft {
+				if n := selectedGraphNode(); currentScenarioGraphSession() != nil && n != nil && n.Kind == graphNodeFinish {
+					n.Action = i
+				} else if app.scenarioSavedDraft {
 					app.savedEditDraft.Action = i
 				} else {
 					app.selectedAction = i
 					app.settings.Action = i
 					saveSettings()
+				}
+				if n := selectedGraphNode(); n != nil && n.Kind == graphNodeFinish {
+					n.Action = i
+					persistCurrentScenarioGraph()
 				}
 				playUI(successSound)
 				if app.scenarioSavedDraft {
@@ -8243,6 +8992,7 @@ func onClick(x, y int32) {
 	if app.section == 15 {
 		if pointIn(app.blockEditorBackRect, x, y) || pointIn(app.blockEditorDoneRect, x, y) {
 			syncScenarioWhenFields()
+			syncCurrentGraphFromLegacy()
 			if app.scenarioSavedDraft {
 				app.section = 13
 			} else {
@@ -8261,7 +9011,11 @@ func onClick(x, y int32) {
 				}
 				syncScenarioWhenFields()
 				app.selectedMode = i
-				if app.scenarioSavedDraft {
+				if currentScenarioGraphSession() != nil {
+					if n := selectedGraphNode(); n != nil && n.Kind == graphNodeTrigger {
+						n.Mode = i
+					}
+				} else if app.scenarioSavedDraft {
 					app.savedEditDraft.Mode = i
 				} else {
 					app.settings.Mode = i
@@ -8278,7 +9032,9 @@ func onClick(x, y int32) {
 			return
 		}
 		if app.selectedMode == 3 && pointIn(app.processClearRect, x, y) {
-			if app.scenarioSavedDraft {
+			if n := selectedGraphNode(); currentScenarioGraphSession() != nil && n != nil && n.Kind == graphNodeTrigger {
+				n.Process = ""
+			} else if app.scenarioSavedDraft {
 				app.savedEditDraft.WatchProcess = ""
 			} else {
 				app.settings.WatchProcess = ""
@@ -8292,7 +9048,9 @@ func onClick(x, y int32) {
 		if app.selectedMode == 4 {
 			for i, r := range app.recurrenceKindRects {
 				if pointIn(r, x, y) {
-					if app.scenarioSavedDraft {
+					if n := selectedGraphNode(); currentScenarioGraphSession() != nil && n != nil && n.Kind == graphNodeTrigger {
+						n.Recurrence.Kind = i
+					} else if app.scenarioSavedDraft {
 						app.savedEditDraft.Recurrence.Kind = i
 					} else {
 						app.settings.Recurrence.Kind = i
@@ -8302,14 +9060,16 @@ func onClick(x, y int32) {
 					return
 				}
 			}
-			recKind := app.settings.Recurrence.Kind
-			if app.scenarioSavedDraft {
+			recKind := currentScenarioRecurrence().Kind
+			if currentScenarioGraphSession() == nil && app.scenarioSavedDraft {
 				recKind = app.savedEditDraft.Recurrence.Kind
 			}
 			if recKind == 2 {
 				for i, r := range app.recurrenceDayRects {
 					if pointIn(r, x, y) {
-						if app.scenarioSavedDraft {
+						if n := selectedGraphNode(); currentScenarioGraphSession() != nil && n != nil && n.Kind == graphNodeTrigger {
+							n.Recurrence.Days[i] = !n.Recurrence.Days[i]
+						} else if app.scenarioSavedDraft {
 							app.savedEditDraft.Recurrence.Days[i] = !app.savedEditDraft.Recurrence.Days[i]
 						} else {
 							app.settings.Recurrence.Days[i] = !app.settings.Recurrence.Days[i]
@@ -8324,6 +9084,9 @@ func onClick(x, y int32) {
 	}
 
 	if app.section == 7 || app.section == 13 {
+		if handleScenarioGraphClick(x, y) {
+			return
+		}
 		if app.confirmDiscardScenario {
 			if pointIn(app.confirmDiscardYesRect, x, y) {
 				closeSavedScenarioEditor()
@@ -8371,8 +9134,9 @@ func onClick(x, y int32) {
 			}
 			return
 		}
-		if pointIn(app.previewRect, x, y) {
-			app.section = 17
+		if app.graphWindow == 0 && pointIn(app.previewRect, x, y) {
+			app.checkReturnSection = app.section
+			app.section = 12
 			playUI(openSound)
 			startPageAnimation()
 			updateInputVisibility()
@@ -8956,6 +9720,9 @@ func onCommand(id, code int, lParam uintptr) {
 		return
 	}
 	if code == EN_KILLFOCUS {
+		if id == idGraphWidth || id == idGraphHeight {
+			applyGraphWindowSizeFields()
+		}
 		if id == idSavedSearch && strings.TrimSpace(getText(app.edits[idSavedSearch])) == "" {
 			app.savedSearchPlaceholder = true
 			pSetWindowTextW.Call(app.edits[idSavedSearch], uintptr(unsafe.Pointer(wstr("Поиск по сохранённым задачам"))))
@@ -9395,6 +10162,10 @@ func savedTaskSummary(t SavedTask) string {
 
 func saveCurrentTask() {
 	syncFields()
+	if app.settings.TaskKind == 1 {
+		syncCurrentGraphFromLegacy()
+		syncLegacyFromCurrentGraph()
+	}
 	if !validateTaskDialog040(captureTaskState(), true) {
 		return
 	}
@@ -9421,6 +10192,7 @@ func saveCurrentTask() {
 		CloseBefore: closeBefore, Processes: processes, WarningSeconds: app.settings.WarningSeconds,
 		Conditions: conds, TriggerLogic: app.settings.TriggerLogic,
 		Steps: steps, Recurrence: app.settings.Recurrence, TaskKind: app.settings.TaskKind,
+		Graph: cloneScenarioGraph(app.settings.ScenarioGraph),
 	}
 	app.settings.SavedTasks = append(app.settings.SavedTasks, t)
 	saveSettings()
@@ -9455,6 +10227,7 @@ func loadSavedTask(t SavedTask) {
 	app.settings.TriggerLogic = t.TriggerLogic
 	app.settings.ActionSteps = cloneActionSteps(t.Steps)
 	app.settings.Recurrence = t.Recurrence
+	app.settings.ScenarioGraph = ensureScenarioGraph(cloneScenarioGraph(t.Graph), taskStateFromSaved040(t))
 	app.settings.TaskKind = t.TaskKind
 	pSetWindowTextW.Call(app.edits[idDelayHours], uintptr(unsafe.Pointer(wstr(strconv.Itoa(t.DelayHours)))))
 	pSetWindowTextW.Call(app.edits[idDelayMinutes], uintptr(unsafe.Pointer(wstr(strconv.Itoa(t.DelayMinutes)))))
@@ -9476,6 +10249,7 @@ func loadSavedTask(t SavedTask) {
 		app.modeAnim[app.selectedMode] = 1
 	}
 	if t.TaskKind == 1 {
+		resetGraphInteraction()
 		app.section = 7
 		app.lastTaskSection = 2
 	} else {
@@ -9506,6 +10280,16 @@ func startOrStopSavedTask(idx int) {
 	now := time.Now()
 	conds := append([]AutomationCondition(nil), t.Conditions...)
 	steps := cloneActionSteps(t.Steps)
+	graph := ScenarioGraph{}
+	if t.TaskKind == 1 {
+		graph = ensureScenarioGraph(cloneScenarioGraph(t.Graph), taskStateFromSaved040(t))
+		if reason := scenarioGraphValidationError(graph); reason != "" {
+			message("Ошибка схемы", reason, MB_OK|MB_ICONERROR)
+			return
+		}
+		conds = nil
+		steps = nil
+	}
 	closeBefore := false
 	processes := []string(nil)
 	if t.TaskKind == 0 {
@@ -9516,7 +10300,7 @@ func startOrStopSavedTask(idx int) {
 	}
 	s := Schedule{active: true, action: t.Action, mode: t.Mode, started: now, sourceTaskID: t.ID, sourceTaskName: t.Name, runID: newRunID(),
 		conditions: conds, triggerLogic: t.TriggerLogic,
-		steps: steps, closeBefore: closeBefore, processes: processes, warningSeconds: t.WarningSeconds}
+		steps: steps, closeBefore: closeBefore, processes: processes, warningSeconds: t.WarningSeconds, graph: graph}
 	switch t.Mode {
 	case 0:
 		d := time.Duration(t.DelayHours)*time.Hour + time.Duration(t.DelayMinutes)*time.Minute + time.Duration(t.DelaySeconds)*time.Second
@@ -9557,7 +10341,7 @@ func startOrStopSavedTask(idx int) {
 		s.target = tm
 		s.total = tm.Sub(now)
 	case 5:
-		if t.TaskKind != 1 || len(conds) == 0 {
+		if t.TaskKind != 1 || (len(graph.Nodes) == 0 && len(conds) == 0) {
 			message("Ошибка", "В сохранённой продвинутой задаче нет условий.", MB_OK|MB_ICONERROR)
 			return
 		}
@@ -9582,6 +10366,7 @@ func openSavedTaskEditor(idx int) {
 	app.savedEditDraft.Processes = append([]string(nil), app.settings.SavedTasks[idx].Processes...)
 	app.savedEditDraft.Conditions = append([]AutomationCondition(nil), app.settings.SavedTasks[idx].Conditions...)
 	app.savedEditDraft.Steps = cloneActionSteps(app.settings.SavedTasks[idx].Steps)
+	app.savedEditDraft.Graph = ensureScenarioGraph(cloneScenarioGraph(app.settings.SavedTasks[idx].Graph), taskStateFromSaved040(app.settings.SavedTasks[idx]))
 	pSetWindowTextW.Call(app.edits[idTaskName], uintptr(unsafe.Pointer(wstr(app.savedEditDraft.Name))))
 	pSetWindowTextW.Call(app.edits[idDelayHours], uintptr(unsafe.Pointer(wstr(strconv.Itoa(app.savedEditDraft.DelayHours)))))
 	pSetWindowTextW.Call(app.edits[idDelayMinutes], uintptr(unsafe.Pointer(wstr(strconv.Itoa(app.savedEditDraft.DelayMinutes)))))
@@ -9593,6 +10378,9 @@ func openSavedTaskEditor(idx int) {
 	pSetWindowTextW.Call(app.edits[idWarning], uintptr(unsafe.Pointer(wstr(strconv.Itoa(max(app.savedEditDraft.WarningSeconds, 0))))))
 	app.savedMenuOpenIdx = -1
 	if app.savedEditDraft.TaskKind == 1 {
+		app.settings.LastScenarioTaskID = app.savedEditDraft.ID
+		saveSettings()
+		resetGraphInteraction()
 		app.scenarioSavedDraft = true
 		app.scenarioReturnSection = 5
 		app.section = 13
@@ -9610,6 +10398,10 @@ func saveSavedTaskEditor() {
 	idx := app.editingSavedIdx
 	if idx < 0 || idx >= len(app.settings.SavedTasks) {
 		return
+	}
+	if app.scenarioSavedDraft && app.savedEditDraft.TaskKind == 1 {
+		syncCurrentGraphFromLegacy()
+		syncLegacyFromCurrentGraph()
 	}
 	t := app.savedEditDraft
 	t.Name = strings.TrimSpace(getText(app.edits[idTaskName]))
@@ -9693,6 +10485,7 @@ func duplicateSavedTask(idx int) {
 	for i := range cp.Steps {
 		cp.Steps[i].ID = newAutomationID("step")
 	}
+	cp.Graph = cloneScenarioGraph(src.Graph)
 	cp.LastRunKey = ""
 	// A recurring copy starts paused so duplicating a task cannot silently create
 	// a second automatic run at the same time as the original.
@@ -9763,6 +10556,16 @@ func openProcessPicker(mode int) {
 func toggleSelectedProcess(name string) {
 	target := strings.ToLower(name)
 	if app.processPickerMode == 2 {
+		if node := selectedGraphNode(); currentScenarioGraphSession() != nil && node != nil && node.Kind == graphNodeTrigger {
+			if strings.EqualFold(node.Process, name) {
+				node.Process = ""
+			} else {
+				node.Process = name
+			}
+			pSetWindowTextW.Call(app.edits[idWatchProcess], uintptr(unsafe.Pointer(wstr(node.Process))))
+			persistCurrentScenarioGraph()
+			return
+		}
 		if strings.EqualFold(app.settings.WatchProcess, name) {
 			app.settings.WatchProcess = ""
 		} else {
@@ -9860,6 +10663,9 @@ func processSelectedInCurrentPicker(name string) bool {
 	case 1:
 		return contains(app.settings.SafetyProcesses)
 	case 2:
+		if node := selectedGraphNode(); currentScenarioGraphSession() != nil && node != nil && node.Kind == graphNodeTrigger {
+			return strings.EqualFold(node.Process, name)
+		}
 		return strings.EqualFold(app.settings.WatchProcess, name)
 	case 3:
 		return strings.EqualFold(app.conditionDraft.Text, name)
@@ -10002,6 +10808,16 @@ func startSchedule() {
 		return
 	}
 	syncFields()
+	graph := ScenarioGraph{}
+	if app.settings.TaskKind == 1 {
+		syncCurrentGraphFromLegacy()
+		state := syncLegacyFromCurrentGraph()
+		graph = ensureScenarioGraph(cloneScenarioGraph(state.Graph), state)
+		if reason := scenarioGraphValidationError(graph); reason != "" {
+			message("Ошибка схемы", reason, MB_OK|MB_ICONERROR)
+			return
+		}
+	}
 	now := time.Now()
 	conds := append([]AutomationCondition(nil), app.settings.AdvancedConditions...)
 	steps := cloneActionSteps(app.settings.ActionSteps)
@@ -10013,9 +10829,13 @@ func startSchedule() {
 		closeBefore = app.settings.CloseBefore
 		processes = append([]string(nil), app.settings.Processes...)
 	}
+	if len(graph.Nodes) > 0 {
+		conds = nil
+		steps = nil
+	}
 	s := Schedule{active: true, action: app.selectedAction, mode: app.selectedMode, started: now, runID: newRunID(),
 		conditions: conds, triggerLogic: app.settings.TriggerLogic,
-		steps: steps, closeBefore: closeBefore, processes: processes, warningSeconds: app.settings.WarningSeconds}
+		steps: steps, closeBefore: closeBefore, processes: processes, warningSeconds: app.settings.WarningSeconds, graph: graph}
 	switch app.selectedMode {
 	case 0:
 		d := time.Duration(app.settings.DelayHours)*time.Hour + time.Duration(app.settings.DelayMinutes)*time.Minute + time.Duration(app.settings.DelaySeconds)*time.Second
@@ -10066,7 +10886,7 @@ func startSchedule() {
 		s.target = t
 		s.total = t.Sub(now)
 	case 5:
-		if app.settings.TaskKind != 1 || len(conds) == 0 {
+		if app.settings.TaskKind != 1 || (len(graph.Nodes) == 0 && len(conds) == 0) {
 			message("Ошибка", "Для запуска по условиям добавьте хотя бы одно условие в продвинутой задаче.", MB_OK|MB_ICONERROR)
 			return
 		}
@@ -10095,6 +10915,87 @@ func cancelSchedule(log bool) {
 		appendRunHistory("CANCEL", "Отменено пользователем", runID)
 	}
 	invalidate(app.hwnd)
+}
+
+func toggleActiveSchedulePaused() {
+	app.mu.Lock()
+	if !app.schedule.active {
+		app.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	if app.schedule.paused {
+		pausedFor := now.Sub(app.schedule.pausedAt)
+		if pausedFor > 0 && (app.schedule.mode == 0 || app.schedule.mode == 1 || app.schedule.mode == 4) {
+			app.schedule.target = app.schedule.target.Add(pausedFor)
+			app.schedule.started = app.schedule.started.Add(pausedFor)
+		}
+		app.schedule.paused = false
+		app.schedule.pausedAt = time.Time{}
+		app.status = "Задача продолжена"
+	} else {
+		app.schedule.paused = true
+		app.schedule.pausedAt = now
+		app.status = "Задача приостановлена"
+	}
+	paused := app.schedule.paused
+	runID := app.schedule.runID
+	app.mu.Unlock()
+	if !paused {
+		resetConditionRuntimes()
+	}
+	state := "Продолжена"
+	if paused {
+		state = "Приостановлена"
+	}
+	appendRunHistory("PAUSE", state+" пользователем", runID)
+	invalidate(app.hwnd)
+}
+
+func schedulePauseState(runID string) (active, paused bool) {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	return app.schedule.active && app.schedule.runID == runID, app.schedule.paused
+}
+
+func waitForScheduleResume(runID string) bool {
+	for {
+		active, paused := schedulePauseState(runID)
+		if !active {
+			return false
+		}
+		if !paused {
+			return true
+		}
+		time.Sleep(80 * time.Millisecond)
+	}
+}
+
+func sleepScheduleAware(runID string, duration time.Duration) bool {
+	remaining := duration
+	for remaining > 0 {
+		if !waitForScheduleResume(runID) {
+			return false
+		}
+		slice := minDuration(remaining, 100*time.Millisecond)
+		started := time.Now()
+		time.Sleep(slice)
+		active, paused := schedulePauseState(runID)
+		if !active {
+			return false
+		}
+		if !paused {
+			remaining -= time.Since(started)
+		}
+	}
+	return true
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
 }
 func postpone10() {
 	if !app.schedule.active {
@@ -10132,6 +11033,12 @@ func tick() {
 	if !app.schedule.active {
 		return
 	}
+	if app.schedule.paused {
+		return
+	}
+	if app.schedule.executing {
+		return
+	}
 	baseReady := false
 	switch app.schedule.mode {
 	case 0, 1, 4:
@@ -10157,7 +11064,10 @@ func tick() {
 		if warning > 0 && rem <= warning && !app.schedule.warned {
 			app.schedule.warned = true
 			app.status = "Скоро выполнится действие — можно отменить"
-			showNotification("PowerPilot", fmt.Sprintf("%s через %s", actionSummary(), formatDuration(rem)))
+		}
+		if app.settings.TaskMinuteWarningNotification && rem > 0 && rem <= time.Minute && !app.schedule.systemWarned {
+			app.schedule.systemWarned = true
+			showWindowsNotification("PowerPilot", fmt.Sprintf("%s через %s", actionSummary(), formatDuration(rem)))
 		}
 		baseReady = !app.schedule.target.After(now)
 	case 2:
@@ -10188,7 +11098,9 @@ func tick() {
 		appendRunHistory("CONDITIONS_OK", "Дополнительные условия выполнены", app.schedule.runID)
 	}
 	ready := baseReady
-	if app.schedule.mode == 5 {
+	if app.schedule.mode == 5 && len(app.schedule.graph.Nodes) > 0 {
+		ready = baseReady
+	} else if app.schedule.mode == 5 {
 		// «По условиям» has no independent base trigger. The condition tree itself is the trigger.
 		ready = len(app.schedule.conditions) > 0 && condReady
 	} else if len(app.schedule.conditions) > 0 {
@@ -10227,17 +11139,32 @@ func tick() {
 }
 
 func executeActionAsync(s Schedule) {
-	if !app.schedule.active {
+	if !app.schedule.active || app.schedule.executing {
 		return
 	}
-	app.schedule.active = false
+	app.schedule.executing = true
 	app.status = "Выполняю сценарий…"
 	execVisualStart040()
 	invalidate(app.hwnd)
 	go func() {
-		if !executeScenarioSteps(s) {
+		finalAction := s.action
+		ok := false
+		if len(s.graph.Nodes) > 0 {
+			finalAction, ok = executeScenarioGraph(s)
+		} else {
+			ok = executeScenarioSteps(s)
+		}
+		// Cancellation replaces the active schedule. Do not let the old worker
+		// update UI, notify, or perform the final power action afterwards.
+		if !scheduleRunIsCurrent(s.runID) {
+			execVisualFinal040("ok")
+			return
+		}
+		if !ok {
 			execVisualFinal040("error")
 			app.mu.Lock()
+			app.schedule.active = false
+			app.schedule.executing = false
 			app.status = "Сценарий остановлен из-за ошибки"
 			app.countdown = "00:00:00"
 			app.progress = 0
@@ -10250,15 +11177,15 @@ func executeActionAsync(s Schedule) {
 			invalidate(app.hwnd)
 			return
 		}
-		appendRunHistory("EXECUTE", fmt.Sprintf("action=%d task=%s", s.action, s.sourceTaskName), s.runID)
-		showNotification("PowerPilot", "Выполняется: "+powerActionName(s.action))
+		appendRunHistory("EXECUTE", fmt.Sprintf("action=%d task=%s", finalAction, s.sourceTaskName), s.runID)
+		showNotification("PowerPilot", "Выполняется: "+powerActionName(finalAction))
 		taskName := strings.TrimSpace(s.sourceTaskName)
 		if taskName == "" {
-			taskName = powerActionName(s.action)
+			taskName = powerActionName(finalAction)
 		}
-		pushAppNotification(notifSuccess, "Задача выполнена", taskName+" · "+powerActionName(s.action), notifTargetHistory)
+		pushAppNotification(notifSuccess, "Задача выполнена", taskName+" · "+powerActionName(finalAction), notifTargetHistory)
 		time.Sleep(180 * time.Millisecond)
-		switch s.action {
+		switch finalAction {
 		case 0:
 			_ = exec.Command("shutdown.exe", "/s", "/t", "0").Start()
 		case 1:
@@ -10272,7 +11199,9 @@ func executeActionAsync(s Schedule) {
 		}
 		execVisualFinal040("ok")
 		app.mu.Lock()
-		if s.action == 4 {
+		app.schedule.active = false
+		app.schedule.executing = false
+		if finalAction == 4 {
 			app.status = "Задача завершена"
 		} else {
 			app.status = "Действие отправлено Windows"
@@ -10282,6 +11211,12 @@ func executeActionAsync(s Schedule) {
 		app.mu.Unlock()
 		invalidate(app.hwnd)
 	}()
+}
+
+func scheduleRunIsCurrent(runID string) bool {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	return runID != "" && app.schedule.active && app.schedule.runID == runID
 }
 
 func powerActionName(a int) string {
@@ -10346,8 +11281,26 @@ func listProcessInfos() []ProcessInfo {
 	for _, v := range byName {
 		out = append(out, v)
 	}
-	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].System != out[j].System {
+			return !out[i].System
+		}
+		unicodeI, unicodeJ := processNameHasNonASCII(out[i].Name), processNameHasNonASCII(out[j].Name)
+		if unicodeI != unicodeJ {
+			return unicodeI
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
 	return out
+}
+
+func processNameHasNonASCII(name string) bool {
+	for _, r := range name {
+		if r > 127 {
+			return true
+		}
+	}
+	return false
 }
 
 func processImagePathAndSession(pid uint32) (string, bool) {
@@ -10727,9 +11680,27 @@ func loadSettings() Settings {
 		if !strings.Contains(string(b), "\"notifications\"") {
 			s.Notifications = true
 		}
+		if !strings.Contains(string(b), "\"task_minute_warning_notification\"") {
+			s.TaskMinuteWarningNotification = true
+		}
+		if !strings.Contains(string(b), "\"notification_sounds\"") {
+			s.NotificationSounds = true
+		}
+		if !strings.Contains(string(b), "\"graph_show_error_options\"") {
+			s.GraphShowErrorOptions = true
+		}
 		if !strings.Contains(string(b), "\"temperature_auto_update\"") {
 			s.TemperatureAutoUpdate = true
 		}
+	}
+	if err != nil {
+		s.Sounds = true
+		s.SoundVolume = 65
+		s.Notifications = true
+		s.TaskMinuteWarningNotification = true
+		s.NotificationSounds = true
+		s.TemperatureAutoUpdate = true
+		s.GraphShowErrorOptions = true
 	}
 	return s
 }
@@ -10752,14 +11723,21 @@ func appendHistory(kind, detail string) {
 	}
 }
 
-func setAutoStart(enabled bool) {
-	exe, _ := os.Executable()
+func setAutoStart(enabled bool) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve PowerPilot executable for autostart: %w", err)
+	}
 	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
 	if enabled {
-		exec.Command("reg.exe", "add", key, "/v", "PowerPilot", "/t", "REG_SZ", "/d", `"`+exe+`"`, `/f`).Run()
-	} else {
-		exec.Command("reg.exe", "delete", key, "/v", "PowerPilot", "/f").Run()
+		if err := exec.Command("reg.exe", "add", key, "/v", "PowerPilot", "/t", "REG_SZ", "/d", `"`+exe+`"`, `/f`).Run(); err != nil {
+			return fmt.Errorf("register PowerPilot autostart: %w", err)
+		}
+		return nil
 	}
+	// Deleting an already absent value is the desired disabled state.
+	_ = exec.Command("reg.exe", "delete", key, "/v", "PowerPilot", "/f").Run()
+	return nil
 }
 
 func splitExactParts(value string) [5]string {
@@ -10867,6 +11845,10 @@ func move(h uintptr, x, y, w, hgt int) {
 		py := int(float64(y+editAnimOffsetY)*sc + .5)
 		pw := max(1, int(float64(w)*sc+.5))
 		ph := max(1, int(float64(hgt)*sc+.5))
+		if deferredEditMoves != nil {
+			deferredEditMoves[h] = RECT{int32(px), int32(py), int32(px + pw), int32(py + ph)}
+			return
+		}
 		repaint := uintptr(1)
 		if suppressEditVisibilityDuringLayout {
 			repaint = 0

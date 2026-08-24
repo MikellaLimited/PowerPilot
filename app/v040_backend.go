@@ -81,6 +81,7 @@ type TaskState struct {
 	Steps          []ActionStep          `json:"steps,omitempty"`
 	Recurrence     RecurrenceSpec        `json:"recurrence"`
 	TaskKind       int                   `json:"task_kind"`
+	Graph          ScenarioGraph         `json:"graph,omitempty"`
 }
 
 type DraftFile struct {
@@ -110,6 +111,7 @@ type PersistedSchedule struct {
 	SourceTaskID   string                `json:"source_task_id"`
 	SourceTaskName string                `json:"source_task_name"`
 	RunID          string                `json:"run_id"`
+	Graph          ScenarioGraph         `json:"graph,omitempty"`
 }
 
 type SessionFile struct {
@@ -149,7 +151,7 @@ func captureTaskState() TaskState {
 		Exact: s.Exact, IdleMinutes: s.IdleMinutes, WatchProcess: s.WatchProcess,
 		CloseBefore: s.CloseBefore, Processes: append([]string(nil), s.Processes...),
 		WarningSeconds: s.WarningSeconds, Conditions: append([]AutomationCondition(nil), s.AdvancedConditions...),
-		TriggerLogic: s.TriggerLogic, Steps: cloneActionSteps(s.ActionSteps), Recurrence: s.Recurrence, TaskKind: app.currentTaskKind,
+		TriggerLogic: s.TriggerLogic, Steps: cloneActionSteps(s.ActionSteps), Recurrence: s.Recurrence, TaskKind: app.currentTaskKind, Graph: cloneScenarioGraph(s.ScenarioGraph),
 	}
 }
 
@@ -165,6 +167,7 @@ func applyTaskState(t TaskState) {
 	app.settings.TriggerLogic = t.TriggerLogic
 	app.settings.ActionSteps = cloneActionSteps(t.Steps)
 	app.settings.Recurrence = t.Recurrence
+	app.settings.ScenarioGraph = cloneScenarioGraph(t.Graph)
 	app.settings.TaskKind = t.TaskKind
 	app.currentTaskKind = t.TaskKind
 	if app.hwnd != 0 {
@@ -223,14 +226,14 @@ func persistedSchedule040() PersistedSchedule {
 	return PersistedSchedule{Active: s.active, Action: s.action, Mode: s.mode, Target: s.target, IdleThreshold: s.idleThreshold,
 		WatchProcess: s.watchProcess, Started: s.started, Total: s.total, Conditions: append([]AutomationCondition(nil), s.conditions...),
 		TriggerLogic: s.triggerLogic, Steps: cloneActionSteps(s.steps), CloseBefore: s.closeBefore, Processes: append([]string(nil), s.processes...),
-		WarningSeconds: s.warningSeconds, SourceTaskID: s.sourceTaskID, SourceTaskName: s.sourceTaskName, RunID: s.runID}
+		WarningSeconds: s.warningSeconds, SourceTaskID: s.sourceTaskID, SourceTaskName: s.sourceTaskName, RunID: s.runID, Graph: cloneScenarioGraph(s.graph)}
 }
 
 func scheduleFromPersisted040(p PersistedSchedule) Schedule {
 	return Schedule{active: p.Active, action: p.Action, mode: p.Mode, target: p.Target, idleThreshold: p.IdleThreshold, watchProcess: p.WatchProcess,
 		started: p.Started, total: p.Total, conditions: append([]AutomationCondition(nil), p.Conditions...), triggerLogic: p.TriggerLogic,
 		steps: cloneActionSteps(p.Steps), closeBefore: p.CloseBefore, processes: append([]string(nil), p.Processes...), warningSeconds: p.WarningSeconds,
-		sourceTaskID: p.SourceTaskID, sourceTaskName: p.SourceTaskName, runID: p.RunID}
+		sourceTaskID: p.SourceTaskID, sourceTaskName: p.SourceTaskName, runID: p.RunID, graph: cloneScenarioGraph(p.Graph)}
 }
 
 func saveSession040(d DraftFile) {
@@ -645,7 +648,7 @@ func validateTask040(t TaskState) []ValidationIssue040 {
 			addE("Некорректное время расписания")
 		}
 	case 5:
-		if len(t.Conditions) == 0 {
+		if len(t.Conditions) == 0 && !(t.TaskKind == 1 && len(t.Graph.Nodes) > 0) {
 			addE("Для запуска по условиям добавьте условие")
 		}
 	}
@@ -797,10 +800,21 @@ func normalizeV040Settings() {
 		app.settings.UIScale = 100
 	}
 	app.settings.UIScale = clampInt(app.settings.UIScale, 90, 125)
-	if !app.settings.MiniShowTask && !app.settings.MiniShowCountdown && !app.settings.MiniShowStep && !app.settings.MiniShowMetrics {
+	if !app.settings.MiniShowTask && !app.settings.MiniShowCountdown && !app.settings.MiniShowStep && !app.settings.MiniShowMetrics && !app.settings.MiniLayoutMigrated {
 		app.settings.MiniShowTask = true
 		app.settings.MiniShowCountdown = true
 		app.settings.MiniShowStep = true
+	}
+	if !app.settings.MiniLayoutMigrated {
+		if app.settings.MiniShowMetrics {
+			app.settings.MiniShowCPU = true
+			app.settings.MiniShowGPU = true
+			app.settings.MiniShowRAM = true
+			app.settings.MiniShowNetwork = true
+			app.settings.MiniShowDisk = true
+		}
+		app.settings.MiniShowProgress = true
+		app.settings.MiniLayoutMigrated = true
 	}
 }
 
@@ -818,6 +832,9 @@ var pGetKeyState040 = v040User32.NewProc("GetKeyState")
 
 func keyDown040(vk uintptr) bool { r, _, _ := pGetKeyState040.Call(vk); return int16(r&0xffff) < 0 }
 func handleKeyDown040(vk uintptr) bool {
+	if handleGraphKeyboard(vk) {
+		return true
+	}
 	ctrl := keyDown040(0x11)
 	if ctrl {
 		switch vk {
@@ -846,10 +863,16 @@ func handleKeyDown040(vk uintptr) bool {
 }
 
 func taskStateFromSaved040(t SavedTask) TaskState {
-	return TaskState{Action: t.Action, Mode: t.Mode, DelayHours: t.DelayHours, DelayMinutes: t.DelayMinutes, DelaySeconds: t.DelaySeconds, Exact: t.Exact, IdleMinutes: t.IdleMinutes, WatchProcess: t.WatchProcess, CloseBefore: t.CloseBefore, Processes: append([]string(nil), t.Processes...), WarningSeconds: t.WarningSeconds, Conditions: append([]AutomationCondition(nil), t.Conditions...), TriggerLogic: t.TriggerLogic, Steps: cloneActionSteps(t.Steps), Recurrence: t.Recurrence, TaskKind: t.TaskKind}
+	return TaskState{Action: t.Action, Mode: t.Mode, DelayHours: t.DelayHours, DelayMinutes: t.DelayMinutes, DelaySeconds: t.DelaySeconds, Exact: t.Exact, IdleMinutes: t.IdleMinutes, WatchProcess: t.WatchProcess, CloseBefore: t.CloseBefore, Processes: append([]string(nil), t.Processes...), WarningSeconds: t.WarningSeconds, Conditions: append([]AutomationCondition(nil), t.Conditions...), TriggerLogic: t.TriggerLogic, Steps: cloneActionSteps(t.Steps), Recurrence: t.Recurrence, TaskKind: t.TaskKind, Graph: cloneScenarioGraph(t.Graph)}
 }
 func validateTaskDialog040(t TaskState, saving bool) bool {
 	issues := validateTask040(t)
+	if t.TaskKind == 1 {
+		g := ensureScenarioGraph(t.Graph, t)
+		for _, gi := range validateScenarioGraph(g) {
+			issues = append(issues, ValidationIssue040{Level: gi.Level, Message: gi.Message})
+		}
+	}
 	errs, warns := 0, 0
 	lines := []string{}
 	for _, i := range issues {

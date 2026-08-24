@@ -25,6 +25,7 @@ const (
 	nifInfo         = 0x00000010
 	niifInfo        = 0x00000001
 	niifWarning     = 0x00000002
+	niifNoSound     = 0x00000010
 )
 
 func systemUsesLightTheme() bool {
@@ -44,6 +45,12 @@ func systemUsesLightTheme() bool {
 }
 
 func showNotification(title, text string) {
+	// Legacy UI feedback must stay inside PowerPilot. Windows balloons are
+	// intentionally reserved for explicit notification actions and the optional
+	// one-minute task warning.
+}
+
+func showWindowsNotification(title, text string) {
 	if !app.settings.Notifications || app.hwnd == 0 {
 		return
 	}
@@ -51,8 +58,12 @@ func showNotification(title, text string) {
 	if icon == 0 {
 		icon, _, _ = pLoadIconW.Call(0, IDI_APPLICATION)
 	}
+	flags := uint32(niifInfo)
+	if !app.settings.NotificationSounds {
+		flags |= niifNoSound
+	}
 	ni := NOTIFYICONDATA{CbSize: uint32(unsafe.Sizeof(NOTIFYICONDATA{})), HWnd: app.hwnd, UID: 1,
-		UFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP | nifInfo, UCallbackMessage: WM_TRAY, HIcon: icon, DwInfoFlags: niifInfo}
+		UFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP | nifInfo, UCallbackMessage: WM_TRAY, HIcon: icon, DwInfoFlags: flags}
 	copy(ni.SzTip[:], syscall.StringToUTF16("PowerPilot"))
 	copy(ni.SzInfoTitle[:], syscall.StringToUTF16(truncateUTF16(title, 63)))
 	copy(ni.SzInfo[:], syscall.StringToUTF16(truncateUTF16(text, 255)))
@@ -116,9 +127,28 @@ func normalizeSettings() {
 	if app.settings.ResourceTimelineMode < 0 || app.settings.ResourceTimelineMode > 1 {
 		app.settings.ResourceTimelineMode = 0
 	}
+	if app.settings.GraphWindowSize < -1 || app.settings.GraphWindowSize > 2 {
+		app.settings.GraphWindowSize = 0
+	}
+	if app.settings.GraphWindowWidth <= 0 {
+		app.settings.GraphWindowWidth, _ = scenarioGraphPresetSize(app.settings.GraphWindowSize)
+	}
+	if app.settings.GraphWindowHeight <= 0 {
+		_, app.settings.GraphWindowHeight = scenarioGraphPresetSize(app.settings.GraphWindowSize)
+	}
+	app.settings.GraphWindowWidth = clampInt(app.settings.GraphWindowWidth, 900, 3840)
+	app.settings.GraphWindowHeight = clampInt(app.settings.GraphWindowHeight, 760, 2160)
 	app.settings.AdvancedConditions = migrateLegacyConditionGroups(app.settings.AdvancedConditions)
 	for i := range app.settings.SavedTasks {
 		app.settings.SavedTasks[i].Conditions = migrateLegacyConditionGroups(app.settings.SavedTasks[i].Conditions)
+	}
+	if app.settings.TaskKind == 1 || len(app.settings.AdvancedConditions) > 0 || len(app.settings.ActionSteps) > 0 {
+		app.settings.ScenarioGraph = ensureScenarioGraph(app.settings.ScenarioGraph, legacyTaskStateFromSettings(app.settings))
+	}
+	for i := range app.settings.SavedTasks {
+		if app.settings.SavedTasks[i].TaskKind == 1 {
+			app.settings.SavedTasks[i].Graph = ensureScenarioGraph(app.settings.SavedTasks[i].Graph, taskStateFromSaved040(app.settings.SavedTasks[i]))
+		}
 	}
 	if app.settings.SoundVolume < 0 || app.settings.SoundVolume > 100 {
 		app.settings.SoundVolume = 65
