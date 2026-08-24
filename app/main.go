@@ -26,7 +26,7 @@ const appVersion = "0.8.3"
 const normalMinClientW = 640
 const normalMinClientH = 650
 const miniClientW = 500
-const miniClientH = 176
+const miniClientH = 196
 
 //go:embed assets/click.wav
 var clickSound []byte
@@ -2196,24 +2196,16 @@ func layoutControlsLogical(rc RECT) {
 			move(app.edits[idSoundVolume], int(app.volumeValueRect.Left)+4, int(app.volumeValueRect.Top)+5, valueW-28, 18)
 			pShowWindow.Call(app.edits[idSoundVolume], SW_SHOW)
 		case 7:
-			// Keep the sticky sub-navigation clear of the first section title.
-			row0 := contentY + 34
-			app.miniAlwaysTopRect = RECT{int32(innerLeft), int32(row0), int32(innerLeft + 28), int32(row0 + 28)}
-			miniY := row0 + 72
-			miniGap := 8
-			miniW := (settingsContentW - miniGap*3) / 4
-			for i := 0; i < 4; i++ {
-				x := innerLeft + i*(miniW+miniGap)
-				app.miniOptionRects[i] = RECT{int32(x), int32(miniY), int32(x + miniW), int32(miniY + 38)}
+			app.miniAlwaysTopRect = RECT{}
+			for i := range app.miniOptionRects {
+				app.miniOptionRects[i] = RECT{}
 			}
-			sizeY := miniY + 86
-			sizeGap := 8
-			sizeW := (settingsContentW - sizeGap*2) / 3
-			for i := 0; i < 3; i++ {
-				x := innerLeft + i*(sizeW+sizeGap)
-				app.miniSizeRects[i] = RECT{int32(x), int32(sizeY), int32(x + sizeW), int32(sizeY + 38)}
+			for i := range app.miniSizeRects {
+				app.miniSizeRects[i] = RECT{}
 			}
-			scaleY := sizeY + 86
+			// Mini-window controls live on their dedicated page. Interface settings
+			// now start immediately with the application scale controls.
+			scaleY := contentY + 34
 			scaleGap := 8
 			scaleW := (settingsContentW - scaleGap*3) / 4
 			for i := 0; i < 4; i++ {
@@ -3039,7 +3031,7 @@ func settingsVirtualContentHeight() int {
 	case 6:
 		return 150
 	case 7:
-		return 850
+		return 590
 	case 8:
 		return 230
 	case 9:
@@ -3780,31 +3772,40 @@ func drawCaptionGlyph(hdc uintptr, kind int, r RECT) {
 }
 
 func drawMiniMode(hdc uintptr, rc RECT) {
-	pad := 20
 	w := int(rc.Right - rc.Left)
-	leftW := max(160, minInt(260, (w-pad*2-18)/2))
-	rightX := pad + leftW + 18
+	contentTop := 52
+	contentBottom := int(app.miniCancelRect.Top) - 8
+	gap, sidePad := 12, 12
+	cardW := (w - sidePad*2 - gap) / 2
+	leftCard := RECT{int32(sidePad), int32(contentTop), int32(sidePad + cardW), int32(contentBottom)}
+	rightCard := RECT{int32(sidePad + cardW + gap), int32(contentTop), int32(w - sidePad), int32(contentBottom)}
+	roundFill(hdc, leftCard, blendColor(surfacePanelColor(), surfaceButtonColor(), .18), 11)
+	roundFill(hdc, rightCard, blendColor(surfacePanelColor(), surfaceButtonColor(), .18), 11)
+	leftX, leftW := int(leftCard.Left)+12, int(leftCard.Right-leftCard.Left)-24
+	rightX, rightW := int(rightCard.Left)+12, int(rightCard.Right-rightCard.Left)-24
 	if app.settings.MiniShowTask {
-		drawText(hdc, miniTaskName(), pad, 49, leftW, 17, 10, 650, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		drawText(hdc, miniTaskName(), leftX, contentTop+5, leftW, 17, 10, 650, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	}
 	if app.settings.MiniShowCountdown {
-		drawText(hdc, app.countdownOrDefault(), pad, 65, leftW, 31, 23, 500, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, app.countdownOrDefault(), leftX, contentTop+23, leftW, 31, 22, 500, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	}
 	current, next := miniStepSummaries()
-	rightY := 49
+	rightY, rowH := contentTop+4, 14
 	if app.settings.MiniShowStep {
-		drawText(hdc, "Сейчас · "+current, rightX, rightY, max(80, w-rightX-20), 16, 9, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		rightY += 16
+		drawText(hdc, "Сейчас · "+current, rightX, rightY, rightW, rowH, 9, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		rightY += rowH
 	}
 	if app.settings.MiniShowNextStep {
-		drawText(hdc, "Далее · "+next, rightX, rightY, max(80, w-rightX-20), 16, 9, 550, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		rightY += 16
+		drawText(hdc, "Далее · "+next, rightX, rightY, rightW, rowH, 9, 550, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		rightY += rowH
 	}
-	if metric := miniMetricsText(metricsSnapshot()); metric != "" {
-		drawText(hdc, metric, rightX, rightY, max(80, w-rightX-20), 16, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	for _, metric := range miniMetricsLines(metricsSnapshot()) {
+		drawText(hdc, metric, rightX, rightY, rightW, rowH, 8, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		rightY += rowH
 	}
 	if app.settings.MiniShowProgress {
-		bar := RECT{int32(rightX), 92, rc.Right - 20, 98}
+		barY := minInt(contentBottom-11, rightY+4)
+		bar := RECT{int32(rightX), int32(barY), int32(rightX + rightW), int32(barY + 5)}
 		roundFill(hdc, bar, surfaceButtonColor(), 3)
 		bw := int32(float64(bar.Right-bar.Left) * app.progress)
 		if bw > 0 {
@@ -3845,7 +3846,7 @@ func miniStepSummaries() (string, string) {
 	return current, next
 }
 
-func miniMetricsText(m MetricSnapshot) string {
+func miniMetricParts(m MetricSnapshot) []string {
 	parts := []string{}
 	if app.settings.MiniShowCPU && m.CPU >= 0 {
 		parts = append(parts, fmt.Sprintf("CPU %.0f%%", m.CPU))
@@ -3862,7 +3863,19 @@ func miniMetricsText(m MetricSnapshot) string {
 	if app.settings.MiniShowDisk && m.DiskPercent >= 0 {
 		parts = append(parts, fmt.Sprintf("Диск %.0f%%", m.DiskPercent))
 	}
-	return strings.Join(parts, " · ")
+	return parts
+}
+
+func miniMetricsLines(m MetricSnapshot) []string {
+	parts := miniMetricParts(m)
+	if len(parts) <= 3 {
+		if len(parts) == 0 {
+			return nil
+		}
+		return []string{strings.Join(parts, " · ")}
+	}
+	split := (len(parts) + 1) / 2
+	return []string{strings.Join(parts[:split], " · "), strings.Join(parts[split:], " · ")}
 }
 
 func drawActionPage(hdc uintptr, body RECT, w int) {
@@ -4156,39 +4169,6 @@ func drawSoundSettings(hdc uintptr, body RECT) {
 
 func drawInterfaceSettings040(hdc uintptr, body RECT) {
 	left := app.settingsContentLeft
-	drawText(hdc, "Мини-режим", left, int(app.miniAlwaysTopRect.Top)-26, 220, 20, 13, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	drawToggle(hdc, app.miniAlwaysTopRect, app.settings.AlwaysOnTopMini)
-	drawText(hdc, "Поверх остальных окон в мини-режиме", int(app.miniAlwaysTopRect.Right)+12, int(app.miniAlwaysTopRect.Top)-1, int(body.Right-app.miniAlwaysTopRect.Right)-30, 20, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc, "Что показывать", left, int(app.miniOptionRects[0].Top)-26, 200, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	names := []string{"Задача", "Таймер", "Текущий шаг", "Метрики"}
-	vals := []bool{app.settings.MiniShowTask, app.settings.MiniShowCountdown, app.settings.MiniShowStep, app.settings.MiniShowCPU || app.settings.MiniShowGPU || app.settings.MiniShowRAM || app.settings.MiniShowNetwork || app.settings.MiniShowDisk}
-	for i, r := range app.miniOptionRects {
-		c := surfaceButtonColor()
-		if vals[i] {
-			c = blendColor(c, theme.accent, .48)
-		}
-		rv, hv := hoverCardRect(r)
-		if hv > 0 && !vals[i] {
-			c = blendColor(c, theme.accent2, .08*hv)
-		}
-		roundFill(hdc, rv, c, 9)
-		drawText(hdc, names[i], int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 10, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-	}
-	drawText(hdc, "Размер мини-приложения", left, int(app.miniSizeRects[0].Top)-26, 240, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	sizeLabels := []string{"Компактный", "Обычный", "Крупный"}
-	sizeValues := []int{90, 100, 120}
-	for i, r := range app.miniSizeRects {
-		c := surfaceButtonColor()
-		if miniScalePercent040() == sizeValues[i] {
-			c = blendColor(c, theme.accent, .48)
-		}
-		rv, hv := hoverCardRect(r)
-		if hv > 0 && miniScalePercent040() != sizeValues[i] {
-			c = blendColor(c, theme.accent2, .08*hv)
-		}
-		roundFill(hdc, rv, c, 9)
-		drawText(hdc, sizeLabels[i], int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top), 10, 650, theme.text, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-	}
 	drawText(hdc, "Масштаб интерфейса", left, int(app.uiScaleRects[0].Top)-26, 240, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	scales := []int{90, 100, 110, 125}
 	for i, r := range app.uiScaleRects {
@@ -4324,8 +4304,9 @@ func drawMiniWindowSettings(hdc uintptr, body RECT) {
 		drawText(hdc, "Далее · "+next, px, py, int(preview.Right)-px-16, 16, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 		py += 16
 	}
-	if metric := miniMetricsText(metricsSnapshot()); metric != "" {
-		drawText(hdc, metric, px, py, int(preview.Right)-px-16, 16, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	for _, metric := range miniMetricsLines(metricsSnapshot()) {
+		drawText(hdc, metric, px, py, int(preview.Right)-px-16, 13, 8, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		py += 13
 	}
 	if values[9] {
 		bar := RECT{preview.Left + 16, preview.Bottom - 14, preview.Right - 16, preview.Bottom - 9}
@@ -8319,53 +8300,6 @@ func onClick(x, y int32) {
 				pSetCapture.Call(app.hwnd)
 				setTimelineTicksFromX(x)
 				return
-			}
-			if pointIn(app.miniAlwaysTopRect, x, y) {
-				app.settings.AlwaysOnTopMini = !app.settings.AlwaysOnTopMini
-				saveSettings()
-				applyMiniTopmost040()
-				playUI(clickSound)
-				invalidate(app.hwnd)
-				return
-			}
-			for i, r := range app.miniOptionRects {
-				if !pointIn(r, x, y) {
-					continue
-				}
-				switch i {
-				case 0:
-					app.settings.MiniShowTask = !app.settings.MiniShowTask
-				case 1:
-					app.settings.MiniShowCountdown = !app.settings.MiniShowCountdown
-				case 2:
-					app.settings.MiniShowStep = !app.settings.MiniShowStep
-				case 3:
-					enabled := !(app.settings.MiniShowCPU || app.settings.MiniShowGPU || app.settings.MiniShowRAM || app.settings.MiniShowNetwork || app.settings.MiniShowDisk)
-					app.settings.MiniShowMetrics = enabled
-					app.settings.MiniShowCPU, app.settings.MiniShowGPU = enabled, enabled
-					app.settings.MiniShowRAM, app.settings.MiniShowNetwork, app.settings.MiniShowDisk = enabled, enabled, enabled
-				}
-				saveSettings()
-				playUI(clickSound)
-				invalidate(app.hwnd)
-				return
-			}
-			sizeValues := []int{90, 100, 120}
-			for i, r := range app.miniSizeRects {
-				if pointIn(r, x, y) {
-					app.settings.MiniSize = sizeValues[i]
-					saveSettings()
-					if app.miniMode {
-						mw, mh := miniClientSize040()
-						var wr RECT
-						pGetWindowRect.Call(app.hwnd, uintptr(unsafe.Pointer(&wr)))
-						pSetWindowPos.Call(app.hwnd, 0, uintptr(wr.Left), uintptr(wr.Top), uintptr(mw), uintptr(mh), SWP_NOZORDER|SWP_NOACTIVATE)
-						layoutControls(app.hwnd)
-					}
-					playUI(clickSound)
-					invalidate(app.hwnd)
-					return
-				}
 			}
 			scales := []int{90, 100, 110, 125}
 			for i, r := range app.uiScaleRects {

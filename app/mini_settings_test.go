@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"image"
 	_ "image/png"
+	"strings"
 	"testing"
 )
 
@@ -60,6 +61,27 @@ func TestMiniPinAssetsDecode(t *testing.T) {
 		}
 		if cfg.Width != 50 || cfg.Height != 50 {
 			t.Fatalf("%s icon is %dx%d, want 50x50", name, cfg.Width, cfg.Height)
+		}
+	}
+}
+
+func TestMiniMetricsWrapIntoTwoCompleteLines(t *testing.T) {
+	old := app.settings
+	t.Cleanup(func() { app.settings = old })
+	app.settings.MiniShowCPU = true
+	app.settings.MiniShowGPU = true
+	app.settings.MiniShowRAM = true
+	app.settings.MiniShowNetwork = true
+	app.settings.MiniShowDisk = true
+
+	lines := miniMetricsLines(MetricSnapshot{CPU: 10, GPU: 20, RAMPercent: 30, NetworkKBps: 40, DiskPercent: 50})
+	if len(lines) != 2 {
+		t.Fatalf("got %d metric lines, want 2", len(lines))
+	}
+	joined := lines[0] + " " + lines[1]
+	for _, want := range []string{"CPU", "GPU", "ОЗУ", "Сеть", "Диск"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("wrapped metrics lost %q: %q", want, joined)
 		}
 	}
 }

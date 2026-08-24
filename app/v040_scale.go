@@ -22,7 +22,14 @@ func miniScalePercent040() int {
 
 func miniClientSize040() (int32, int32) {
 	s := float64(miniScalePercent040()) / 100.0
-	return int32(math.Round(float64(miniClientW) * s)), int32(math.Round(float64(miniClientH) * s))
+	// Width follows the selected compact/normal/large preset. Height keeps a
+	// content-safe minimum so two metric rows and the progress bar never collide
+	// with the action buttons in compact mode.
+	height := int32(math.Round(float64(miniClientH) * s))
+	if height < miniClientH {
+		height = miniClientH
+	}
+	return int32(math.Round(float64(miniClientW) * s)), height
 }
 
 func uiScaleFactor040() float64 {
