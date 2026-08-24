@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -3781,49 +3782,71 @@ func drawMiniMode(hdc uintptr, rc RECT) {
 	w := int(rc.Right - rc.Left)
 	contentTop := 52
 	contentBottom := int(app.miniCancelRect.Top) - 8
-	gap, sidePad := 12, 12
-	cardW := (w - sidePad*2 - gap) / 2
-	leftCard := RECT{int32(sidePad), int32(contentTop), int32(sidePad + cardW), int32(contentBottom)}
-	rightCard := RECT{int32(sidePad + cardW + gap), int32(contentTop), int32(w - sidePad), int32(contentBottom)}
-	roundFill(hdc, leftCard, blendColor(surfacePanelColor(), surfaceButtonColor(), .18), 11)
-	roundFill(hdc, rightCard, blendColor(surfacePanelColor(), surfaceButtonColor(), .18), 11)
-	leftX, leftW := int(leftCard.Left)+12, int(leftCard.Right-leftCard.Left)-24
-	rightX, rightW := int(rightCard.Left)+12, int(rightCard.Right-rightCard.Left)-24
-	if app.settings.MiniShowTask {
-		drawText(hdc, miniTaskName(), leftX, contentTop+5, leftW, 17, 10, 650, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	}
-	if app.settings.MiniShowCountdown {
-		drawText(hdc, app.countdownOrDefault(), leftX, contentTop+23, leftW, 31, 22, 500, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	}
-	current, next := miniStepSummaries()
-	rightY, rowH := contentTop+4, 14
-	if app.settings.MiniShowStep {
-		drawText(hdc, "Сейчас · "+current, rightX, rightY, rightW, rowH, 9, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		rightY += rowH
-	}
-	if app.settings.MiniShowNextStep {
-		drawText(hdc, "Далее · "+next, rightX, rightY, rightW, rowH, 9, 550, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		rightY += rowH
-	}
-	for _, metric := range miniMetricsLines(metricsSnapshot()) {
-		drawText(hdc, metric, rightX, rightY, rightW, rowH, 8, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		rightY += rowH
-	}
-	if app.settings.MiniShowProgress {
-		barY := minInt(contentBottom-11, rightY+4)
-		bar := RECT{int32(rightX), int32(barY), int32(rightX + rightW), int32(barY + 5)}
-		roundFill(hdc, bar, surfaceButtonColor(), 3)
-		bw := int32(float64(bar.Right-bar.Left) * app.progress)
-		if bw > 0 {
-			roundFill(hdc, RECT{bar.Left, bar.Top, bar.Left + bw, bar.Bottom}, theme.accent, 3)
-		}
-	}
+	card := RECT{12, int32(contentTop), int32(w - 12), int32(contentBottom)}
+	roundFill(hdc, card, blendColor(surfaceButtonColor(), surfacePanelColor(), .24), 11)
+	drawMiniDashboardContent(hdc, card, false)
 	pauseLabel := "Пауза"
 	if app.schedule.paused {
 		pauseLabel = "Продолжить"
 	}
 	drawButton(hdc, app.miniCancelRect, pauseLabel, true)
 	drawButton(hdc, app.miniPostponeRect, "Отменить", false)
+}
+
+// drawMiniDashboardContent is shared by the settings preview and the actual
+// mini window so their spacing, typography and progress geometry stay aligned.
+func drawMiniDashboardContent(hdc uintptr, card RECT, previewTitle bool) {
+	pad := int32(16)
+	contentTop := int(card.Top) + 7
+	if previewTitle {
+		drawText(hdc, "Предпросмотр мини-окна", int(card.Left+pad), int(card.Top)+8, int(card.Right-card.Left-pad*2), 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+		contentTop = int(card.Top) + 34
+	}
+
+	contentLeft := int(card.Left + pad)
+	contentRight := int(card.Right - pad)
+	columnGap := 12
+	columnW := (contentRight - contentLeft - columnGap) / 2
+	rightX := contentLeft + columnW + columnGap
+
+	leftY := contentTop
+	if app.settings.MiniShowTask {
+		drawText(hdc, miniTaskName(), contentLeft, leftY, columnW, 18, 10, 650, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		leftY += 18
+	}
+	if app.settings.MiniShowCountdown {
+		drawText(hdc, app.countdownOrDefault(), contentLeft, leftY, columnW, 29, 20, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	}
+
+	current, next := miniStepSummaries()
+	rightY := contentTop
+	if app.settings.MiniShowStep {
+		drawText(hdc, "Сейчас · "+current, rightX, rightY, columnW, 16, 9, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		rightY += 16
+	}
+	if app.settings.MiniShowNextStep {
+		drawText(hdc, "Далее · "+next, rightX, rightY, columnW, 16, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		rightY += 16
+	}
+	for _, metric := range miniMetricsLines(metricsSnapshot()) {
+		drawText(hdc, metric, rightX, rightY, columnW, 13, 8, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		rightY += 13
+	}
+
+	if app.settings.MiniShowProgress {
+		bar := RECT{card.Left + pad, card.Bottom - 14, card.Right - pad, card.Bottom - 9}
+		roundFill(hdc, bar, surfacePanelColor(), 3)
+		progress := app.progress
+		if previewTitle && !app.schedule.active {
+			progress = 2.0 / 3.0
+		}
+		progress = math.Max(0, math.Min(1, progress))
+		fillBar := bar
+		fillBar.Right = fillBar.Left + int32(float64(fillBar.Right-fillBar.Left)*progress)
+		if fillBar.Right > fillBar.Left {
+			roundFill(hdc, fillBar, theme.accent, 3)
+		}
+	}
 }
 
 func miniTaskName() string {
@@ -4293,38 +4316,8 @@ func drawMiniWindowSettings(hdc uintptr, body RECT) {
 		cardColor = blendColor(cardColor, theme.accent2, .04*hv)
 	}
 	roundFill(hdc, rv, cardColor, 14)
-	drawText(hdc, "Предпросмотр мини-окна", int(preview.Left)+16, int(preview.Top)+8, int(preview.Right-preview.Left)-32, 20, 12, 650, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	drawMiniDashboardContent(hdc, preview, true)
 	values := miniDetailedValues()
-	name := "Задача PowerPilot"
-	if values[0] {
-		name = miniTaskName()
-	}
-	drawText(hdc, name, int(preview.Left)+16, int(preview.Top)+34, int(preview.Right-preview.Left)/2-24, 18, 10, 650, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	if values[1] {
-		drawText(hdc, app.countdownOrDefault(), int(preview.Left)+16, int(preview.Top)+52, int(preview.Right-preview.Left)/2-24, 29, 20, 550, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
-	}
-	current, next := miniStepSummaries()
-	px := int(preview.Left) + int(preview.Right-preview.Left)/2
-	py := int(preview.Top) + 34
-	if values[2] {
-		drawText(hdc, "Сейчас · "+current, px, py, int(preview.Right)-px-16, 16, 9, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		py += 16
-	}
-	if values[3] {
-		drawText(hdc, "Далее · "+next, px, py, int(preview.Right)-px-16, 16, 9, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		py += 16
-	}
-	for _, metric := range miniMetricsLines(metricsSnapshot()) {
-		drawText(hdc, metric, px, py, int(preview.Right)-px-16, 13, 8, 500, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		py += 13
-	}
-	if values[9] {
-		bar := RECT{preview.Left + 16, preview.Bottom - 14, preview.Right - 16, preview.Bottom - 9}
-		roundFill(hdc, bar, surfacePanelColor(), 3)
-		fillBar := bar
-		fillBar.Right = fillBar.Left + (fillBar.Right-fillBar.Left)*2/3
-		roundFill(hdc, fillBar, theme.accent, 3)
-	}
 
 	drawToggle(hdc, app.miniDetailedTopRect, app.settings.AlwaysOnTopMini)
 	drawText(hdc, "Поверх остальных окон", int(app.miniDetailedTopRect.Right)+12, int(app.miniDetailedTopRect.Top)-2, int(body.Right-app.miniDetailedTopRect.Right)-28, 20, 12, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
