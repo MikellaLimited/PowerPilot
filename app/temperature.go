@@ -127,7 +127,7 @@ func temperatureProviderRuntimeDir() string {
 	return root
 }
 
-const temperatureCollectorRevision = "9"
+const temperatureCollectorRevision = "10-safe"
 const temperatureBundledProviderVersion = "0.9.7-pre724+825dc3d"
 const temperatureBundledProviderRevision = "1"
 const pawnIOVersion = "2.2.0"
@@ -331,6 +331,33 @@ func temperatureProviderSnapshotFile() string {
 	return filepath.Join(d, "sensors.json")
 }
 
+func temperatureCollectorQuarantineFile() string {
+	d := temperatureProviderDir()
+	if d == "" {
+		return ""
+	}
+	return filepath.Join(d, "collector_quarantine.flag")
+}
+
+func temperatureCollectorQuarantined() bool {
+	p := temperatureCollectorQuarantineFile()
+	if p == "" {
+		return false
+	}
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+func clearTemperatureCollectorQuarantine() {
+	if p := temperatureCollectorQuarantineFile(); p != "" {
+		_ = os.Remove(p)
+	}
+	temperatureCollectorControl.Lock()
+	temperatureCollectorControl.StaleSince = time.Time{}
+	temperatureCollectorControl.Quarantined = false
+	temperatureCollectorControl.Unlock()
+}
+
 func temperatureProviderBridgeFile() string {
 	d := temperatureProviderDir()
 	if d == "" {
@@ -417,9 +444,11 @@ func temperatureProviderInstalled() bool {
 }
 
 func temperatureMonitoringEnabled() bool {
-	// The user opted in once the provider payload exists. Even if the elevated collector
-	// is temporarily stale/broken, keep native/Windows/vendor fallbacks visible.
-	return temperatureProviderBasePresent()
+	return hardwareSensorsMayRun(app.settings.HardwareSensorsEnabled, temperatureProviderBasePresent(), temperatureCollectorQuarantined())
+}
+
+func hardwareSensorsMayRun(enabled, providerPresent, quarantined bool) bool {
+	return enabled && providerPresent && !quarantined
 }
 
 func temperatureCollectorNeedsRepair() bool {
@@ -456,6 +485,12 @@ func temperatureProviderStatus() (bool, string) {
 	}
 	if temperatureProviderInstalled() {
 		v := temperatureProviderInstalledVersion()
+		if !app.settings.HardwareSensorsEnabled {
+			return false, fmt.Sprintf("Установлен %s · аппаратный мониторинг выключен", v)
+		}
+		if temperatureCollectorQuarantined() {
+			return false, fmt.Sprintf("Установлен %s · сборщик остановлен после сбоя; включите мониторинг вручную", v)
+		}
 		if temperatureProviderRebootRequired() {
 			return false, fmt.Sprintf("Установлен %s · для полного доступа требуется перезагрузка Windows", v)
 		}
@@ -543,44 +578,30 @@ internal static class Program {
 
     private static Profile OpenProfile(string name, Action<Computer> configure) {
         Profile p = new Profile { Name = name };
+        Computer c = null;
         try {
-            Computer c = new Computer();
+            c = new Computer();
             configure(c);
             c.Open();
             p.Computer = c;
         } catch (Exception ex) {
             p.Error = ex.GetType().Name + ": " + ex.Message;
+            if (c != null) try { c.Close(); } catch { }
         }
         return p;
     }
 
     private static List<Profile> OpenProfiles() {
         List<Profile> profiles = new List<Profile>();
-        // First try the same broad profile as the official monitor. Some systems have a
-        // single optional hardware group that throws during Open(); if that happens, the
-        // isolated profiles below keep CPU/GPU/motherboard/storage temperatures alive.
-        Profile full = OpenProfile("Full", delegate(Computer c) {
-            c.IsCpuEnabled = true; c.IsGpuEnabled = true; c.IsMemoryEnabled = true;
+        // One Computer owns every enabled hardware group. AMD GPU discovery is
+        // intentionally excluded: load/VRAM continue to come from Windows counters,
+        // while ADL/DXCore polling is isolated from the default sensor path.
+        profiles.Add(OpenProfile("Safe", delegate(Computer c) {
+            c.IsCpuEnabled = true; c.IsMemoryEnabled = true;
             c.IsMotherboardEnabled = true; c.IsControllerEnabled = true;
             c.IsStorageEnabled = true; c.IsPsuEnabled = true; c.IsPowerMonitorEnabled = true;
             c.IsBatteryEnabled = true;
-        });
-        profiles.Add(full); // keep both success and failure visible in collector_status.json
-        // Even when the broad profile opens successfully, retry the low-level groups that
-        // most often expose partial/zero values on AM5 and Super-I/O hardware in isolation.
-        // This mirrors a diagnostic restart of those providers and can recover Tctl/Tdie,
-        // CCD/SoC and motherboard/VRM sensors that a broad first pass missed.
-        profiles.Add(OpenProfile("CPU", delegate(Computer c) { c.IsCpuEnabled = true; }));
-        profiles.Add(OpenProfile("Motherboard", delegate(Computer c) { c.IsMotherboardEnabled = true; }));
-        profiles.Add(OpenProfile("Controllers", delegate(Computer c) { c.IsControllerEnabled = true; }));
-        if (full.Computer == null) {
-            profiles.Add(OpenProfile("GPU", delegate(Computer c) { c.IsCpuEnabled = true; c.IsGpuEnabled = true; }));
-            profiles.Add(OpenProfile("Storage", delegate(Computer c) { c.IsStorageEnabled = true; }));
-            profiles.Add(OpenProfile("Memory", delegate(Computer c) { c.IsMemoryEnabled = true; }));
-            profiles.Add(OpenProfile("PSU", delegate(Computer c) { c.IsPsuEnabled = true; }));
-            profiles.Add(OpenProfile("Power", delegate(Computer c) { c.IsPowerMonitorEnabled = true; }));
-            profiles.Add(OpenProfile("Battery", delegate(Computer c) { c.IsBatteryEnabled = true; }));
-        }
+        }));
         return profiles;
     }
 
@@ -631,11 +652,24 @@ internal static class Program {
         try { foreach (IHardware sh in h.SubHardware) DescribeHardware(sh, profileName, states); } catch { }
     }
 
-    private static void AtomicWrite(string path, string value) {
-        string tmp = path + ".tmp";
-        File.WriteAllText(tmp, value, new UTF8Encoding(false));
-        if (File.Exists(path)) File.Delete(path);
-        File.Move(tmp, path);
+    private static bool AtomicWrite(string path, string value) {
+        string tmp = path + ".tmp." + System.Diagnostics.Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture);
+        for (int attempt = 0; attempt < 5; attempt++) {
+            try {
+                File.WriteAllText(tmp, value, new UTF8Encoding(false));
+                if (File.Exists(path)) File.Replace(tmp, path, null, true);
+                else File.Move(tmp, path);
+                return true;
+            } catch (IOException) {
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                Thread.Sleep(40 * (attempt + 1));
+            } catch (UnauthorizedAccessException) {
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                Thread.Sleep(40 * (attempt + 1));
+            }
+        }
+        try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+        return false;
     }
 
     private static void Publish(List<Profile> profiles, string output, string statusPath) {
@@ -655,16 +689,27 @@ internal static class Program {
                 states.Add("{\"Name\":\"" + Esc(p.Name) + "\",\"OK\":false,\"Error\":\"" + Esc(ex.GetType().Name + ": " + ex.Message) + "\"}");
             }
         }
-        AtomicWrite(output, "[" + String.Join(",", rows.ToArray()) + "]");
+        bool snapshotOK = AtomicWrite(output, "[" + String.Join(",", rows.ToArray()) + "]");
         string status = "{\"UpdatedUtc\":\"" + DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) +
             "\",\"SensorCount\":" + rows.Count.ToString(CultureInfo.InvariantCulture) +
+            ",\"SnapshotPublished\":" + (snapshotOK ? "true" : "false") +
             ",\"Profiles\":[" + String.Join(",", states.ToArray()) + "]" +
             ",\"Hardware\":[" + String.Join(",", hardwareStates.ToArray()) + "]}";
         AtomicWrite(statusPath, status);
     }
 
+    private static void CloseProfiles(List<Profile> profiles) {
+        if (profiles == null) return;
+        for (int i = profiles.Count - 1; i >= 0; i--) {
+            Profile p = profiles[i];
+            if (p != null && p.Computer != null) try { p.Computer.Close(); } catch { }
+        }
+    }
+
     public static int Main(string[] args) {
         Mutex mutex = null;
+        EventWaitHandle stop = null;
+        List<Profile> profiles = null;
         bool owns = false;
         try {
             mutex = new Mutex(false, "Local\\PowerPilotHardwareSensors");
@@ -674,27 +719,40 @@ internal static class Program {
             string dir = AppDomain.CurrentDomain.BaseDirectory;
             string outputDir = dir;
             bool once = false;
+            int probeCycles = 1;
             if (args != null) {
                 for (int i = 0; i < args.Length; i++) {
                     string a = args[i] ?? "";
                     if (String.Equals(a, "--once", StringComparison.OrdinalIgnoreCase)) once = true;
+                    else if (a.StartsWith("--probe-cycles=", StringComparison.OrdinalIgnoreCase)) Int32.TryParse(a.Substring("--probe-cycles=".Length), out probeCycles);
                     else if (a.StartsWith("--output-dir=", StringComparison.OrdinalIgnoreCase)) outputDir = a.Substring("--output-dir=".Length).Trim('"');
                     else if (String.Equals(a, "--output-dir", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length) outputDir = (args[++i] ?? "").Trim('"');
                 }
             }
+            if (probeCycles < 1) probeCycles = 1;
+            if (probeCycles > 20) probeCycles = 20;
             if (String.IsNullOrWhiteSpace(outputDir)) outputDir = dir;
             Directory.CreateDirectory(outputDir);
             string output = Path.Combine(outputDir, "sensors.json");
             string status = Path.Combine(outputDir, "collector_status.json");
-            List<Profile> profiles = OpenProfiles();
+            string quarantine = Path.Combine(outputDir, "collector_quarantine.flag");
+            if (File.Exists(quarantine)) return 5;
+            stop = new EventWaitHandle(false, EventResetMode.ManualReset, "Local\\PowerPilotHardwareSensorsStop");
+            profiles = OpenProfiles();
             // Give low-level providers a short warm-up before the first snapshot.
             Thread.Sleep(250);
             Publish(profiles, output, status);
-            if (once) return 0;
-            while (true) {
-                Thread.Sleep(1400);
+            if (once) {
+                for (int cycle = 1; cycle < probeCycles; cycle++) {
+                    if (stop.WaitOne(1000)) break;
+                    Publish(profiles, output, status);
+                }
+                return 0;
+            }
+            while (!stop.WaitOne(5000)) {
                 Publish(profiles, output, status);
             }
+            return 0;
         } catch (Exception ex) {
             try {
                 string fatalDir = AppDomain.CurrentDomain.BaseDirectory;
@@ -711,6 +769,8 @@ internal static class Program {
             } catch { }
             return 4;
         } finally {
+            CloseProfiles(profiles);
+            if (stop != null) stop.Close();
             if (owns && mutex != null) try { mutex.ReleaseMutex(); } catch { }
             if (mutex != null) mutex.Close();
         }
@@ -744,9 +804,6 @@ func installTemperatureProviderAsync() {
 			temperatureProviderState.LastOK = time.Now()
 			temperatureProviderState.LatestVersion = temperatureBundledProviderVersion
 			temperatureProviderState.UpdateAvailable = false
-			temperatureCollectorControl.Lock()
-			temperatureCollectorControl.ProviderUpdatePendingLogged = false
-			temperatureCollectorControl.Unlock()
 		}
 		temperatureProviderState.Unlock()
 		if err == nil {
@@ -761,11 +818,11 @@ func installTemperatureProviderAsync() {
 
 var temperatureCollectorControl struct {
 	sync.Mutex
-	Repairing                   bool
-	TaskRepairing               bool
-	LastEnsure                  time.Time
-	LastTaskRepair              time.Time
-	ProviderUpdatePendingLogged bool
+	TaskRepairing  bool
+	DisablePending bool
+	Quarantined    bool
+	LastTaskRepair time.Time
+	StaleSince     time.Time
 }
 
 var temperatureDiagnosticsState struct {
@@ -859,30 +916,12 @@ func temperatureScheduledTaskExists() bool {
 	return err == nil
 }
 
-func runTemperatureScheduledTask() error {
-	out, err := runSchtasks("/Run", "/TN", temperatureTaskName)
-	if err != nil {
-		// Do not route this command through cmd.exe merely to change the code page:
-		// preserving the argv boundary is more important than localized diagnostic
-		// text. The Win32 exit error is always readable; append native output only
-		// when it is present.
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			msg = err.Error()
-		} else {
-			msg = msg + " (" + err.Error() + ")"
-		}
-		return fmt.Errorf("не удалось запустить повышенный коллектор: %s", msg)
-	}
-	return nil
-}
-
 func repairTemperatureScheduledTaskElevated() error {
 	return runElevatedTemperatureHelper("task-repair", 90*time.Second)
 }
 
 func ensureTemperatureScheduledTaskAsync(force bool) {
-	if !temperatureProviderInstalled() || !temperatureProviderBasePresent() {
+	if !app.settings.HardwareSensorsEnabled || temperatureCollectorQuarantined() || !temperatureProviderInstalled() || !temperatureProviderBasePresent() {
 		return
 	}
 	if !force && temperatureScheduledTaskExists() {
@@ -923,22 +962,94 @@ func ensureTemperatureScheduledTaskAsync(force bool) {
 	}()
 }
 
-func launchTemperatureCollectorFallback() {
-	exe := temperatureProviderCollectorExe()
-	if exe == "" {
+func signalTemperatureCollectorStop() {
+	openEvent := kernel32.NewProc("OpenEventW")
+	setEvent := kernel32.NewProc("SetEvent")
+	const eventModifyState = 0x0002
+	h, _, _ := openEvent.Call(eventModifyState, 0, uintptr(unsafe.Pointer(wstr("Local\\PowerPilotHardwareSensorsStop"))))
+	if h == 0 {
 		return
 	}
-	root := temperatureProviderDir()
-	if root == "" {
-		root = filepath.Dir(exe)
+	setEvent.Call(h)
+	pCloseHandle.Call(h)
+}
+
+func disableTemperatureCollectorAsync(allowElevation bool) {
+	temperatureCollectorControl.Lock()
+	if temperatureCollectorControl.DisablePending {
+		temperatureCollectorControl.Unlock()
+		return
 	}
-	cmd := exec.Command(exe, "--output-dir", root)
-	cmd.Dir = filepath.Dir(exe)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-	_ = cmd.Start()
-	if cmd.Process != nil {
-		_ = cmd.Process.Release()
+	temperatureCollectorControl.DisablePending = true
+	temperatureCollectorControl.Unlock()
+	go func() {
+		defer func() {
+			temperatureCollectorControl.Lock()
+			temperatureCollectorControl.DisablePending = false
+			temperatureCollectorControl.Unlock()
+		}()
+		signalTemperatureCollectorStop()
+		time.Sleep(1200 * time.Millisecond)
+		if !temperatureScheduledTaskExists() {
+			return
+		}
+		_, _ = runSchtasks("/End", "/TN", temperatureTaskName)
+		out, err := runSchtasks("/Change", "/TN", temperatureTaskName, "/DISABLE")
+		if err != nil && allowElevation {
+			techLog040("temperature task disable needs elevation: " + strings.TrimSpace(string(out)))
+			if elevatedErr := runElevatedTemperatureHelper("task-disable", 90*time.Second); elevatedErr != nil {
+				techLog040("temperature task disable failed: " + elevatedErr.Error())
+			}
+		}
+	}()
+}
+
+func quarantineTemperatureCollector(reason string) {
+	temperatureCollectorControl.Lock()
+	if temperatureCollectorControl.Quarantined || temperatureCollectorQuarantined() {
+		temperatureCollectorControl.Unlock()
+		return
 	}
+	temperatureCollectorControl.Quarantined = true
+	temperatureCollectorControl.Unlock()
+	if p := temperatureCollectorQuarantineFile(); p != "" {
+		_ = os.WriteFile(p, []byte(time.Now().UTC().Format(time.RFC3339Nano)+"\n"+reason+"\n"), 0644)
+	}
+	app.settings.HardwareSensorsEnabled = false
+	saveSettings()
+	disableTemperatureCollectorAsync(true)
+	temperatureProviderState.Lock()
+	temperatureProviderState.LastError = "Сборщик датчиков остановлен после сбоя. Включите его вручную после проверки."
+	temperatureProviderState.Unlock()
+	techLog040("temperature collector quarantined: " + reason)
+	if app.hwnd != 0 {
+		pPostMessageW.Call(app.hwnd, WM_RESOURCE_UPDATED, 0, 0)
+	}
+}
+
+func setHardwareSensorsEnabled(enabled bool) {
+	if enabled && !temperatureProviderInstalled() {
+		return
+	}
+	if enabled && (temperatureCollectorNeedsRepair() || temperatureProviderNeedsRepair()) {
+		temperatureProviderState.Lock()
+		temperatureProviderState.LastError = "Сначала обновите компоненты датчиков до безопасной версии."
+		temperatureProviderState.Unlock()
+		return
+	}
+	app.settings.HardwareSensorsEnabled = enabled
+	saveSettings()
+	if !enabled {
+		sampleTemperatures()
+		disableTemperatureCollectorAsync(true)
+		return
+	}
+	clearTemperatureCollectorQuarantine()
+	temperatureProviderState.Lock()
+	temperatureProviderState.LastError = ""
+	temperatureProviderState.Unlock()
+	ensureTemperatureScheduledTaskAsync(true)
+	sampleTemperatures()
 }
 
 func repairTemperatureProviderBundleElevated() error {
@@ -956,98 +1067,8 @@ func repairTemperatureProviderBundleElevated() error {
 	return nil
 }
 
-func repairTemperatureCollectorAsync() {
-	if !temperatureProviderBasePresent() || !temperatureCollectorNeedsRepair() {
-		return
-	}
-	temperatureCollectorControl.Lock()
-	if temperatureCollectorControl.Repairing {
-		temperatureCollectorControl.Unlock()
-		return
-	}
-	temperatureCollectorControl.Repairing = true
-	temperatureCollectorControl.Unlock()
-
-	go func() {
-		defer func() {
-			temperatureCollectorControl.Lock()
-			temperatureCollectorControl.Repairing = false
-			temperatureCollectorControl.Unlock()
-			if app.hwnd != 0 {
-				pPostMessageW.Call(app.hwnd, WM_RESOURCE_UPDATED, 0, 0)
-			}
-		}()
-
-		runtimeDir := temperatureProviderRuntimeDir()
-		if runtimeDir == "" {
-			return
-		}
-		_ = os.MkdirAll(runtimeDir, 0755)
-		next := filepath.Join(runtimeDir, "PowerPilotSensors.next.exe")
-		if err := compileTemperatureCollector(next); err != nil {
-			techLog040("temperature collector repair compile failed: " + err.Error())
-			temperatureProviderState.Lock()
-			temperatureProviderState.LastError = err.Error()
-			temperatureProviderState.Unlock()
-			return
-		}
-
-		// Make the currently installed collector console-less even when a provider
-		// update is waiting for manual confirmation. This removes the persistent
-		// terminal window independently of the LibreHardwareMonitor bundle update.
-		_, _ = runSchtasks("/End", "/TN", temperatureTaskName)
-		cmdKill := exec.Command("taskkill.exe", "/IM", "PowerPilotSensors.exe", "/F")
-		cmdKill.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-		_ = cmdKill.Run()
-		time.Sleep(350 * time.Millisecond)
-		current := temperatureProviderCollectorExe()
-		backup := current + ".bak"
-		_ = os.Remove(backup)
-		if _, err := os.Stat(current); err == nil {
-			_ = os.Rename(current, backup)
-		}
-		if err := os.Rename(next, current); err != nil {
-			if _, statErr := os.Stat(current); statErr != nil {
-				_ = os.Rename(backup, current)
-			}
-			techLog040("temperature collector image locked; native elevated task repair: " + err.Error())
-			temperatureProviderState.Lock()
-			temperatureProviderState.LastError = "Не удалось обновить скрытый коллектор датчиков: " + err.Error()
-			temperatureProviderState.Unlock()
-			return
-		}
-		_ = os.Remove(backup)
-		_ = os.WriteFile(temperatureProviderRevisionFile(), []byte(temperatureCollectorRevision), 0644)
-		if err := runTemperatureScheduledTask(); err != nil {
-			techLog040("temperature scheduled task restart failed: " + err.Error())
-			ensureTemperatureScheduledTaskAsync(true)
-		} else {
-			techLog040("temperature collector revision " + temperatureCollectorRevision + " repaired as windows GUI and restarted")
-		}
-
-		if temperatureBundledProviderNeedsInstall() {
-			temperatureCollectorControl.Lock()
-			shouldLog := !temperatureCollectorControl.ProviderUpdatePendingLogged
-			temperatureCollectorControl.ProviderUpdatePendingLogged = true
-			temperatureCollectorControl.Unlock()
-			if shouldLog {
-				techLog040("temperature provider update pending; current hidden collector kept running until manual update")
-			}
-			temperatureProviderState.Lock()
-			if temperatureProviderState.LastError == "" {
-				temperatureProviderState.LastError = "Доступно обновление датчиков. Установите его вручную в Настройки → Данные."
-			}
-			temperatureProviderState.Unlock()
-		} else {
-			temperatureProviderState.Lock()
-			temperatureProviderState.LastError = ""
-			temperatureProviderState.Unlock()
-		}
-	}()
-}
-
 func ensureTemperatureCollectorRunningAsync() {
-	if !temperatureProviderInstalled() {
+	if !app.settings.HardwareSensorsEnabled || temperatureCollectorQuarantined() || !temperatureProviderInstalled() {
 		return
 	}
 	p := temperatureProviderSnapshotFile()
@@ -1058,43 +1079,28 @@ func ensureTemperatureCollectorRunningAsync() {
 		}
 	}
 	if fresh {
-		return
-	}
-	// A pending provider update must never stop the currently installed collector.
-	// 0.6.15 treated “new bundle available” as a runtime repair and returned here,
-	// leaving sensors.json stale and reducing the UI to the single Storage fallback.
-	// Only a genuinely missing collector blocks restart; revision/provider upgrades
-	// happen independently and explicitly.
-	if exe := temperatureProviderCollectorExe(); exe == "" {
-		return
-	} else if _, err := os.Stat(exe); err != nil {
-		repairTemperatureCollectorAsync()
-		return
-	}
-	temperatureCollectorControl.Lock()
-	if time.Since(temperatureCollectorControl.LastEnsure) < 12*time.Second {
+		temperatureCollectorControl.Lock()
+		temperatureCollectorControl.StaleSince = time.Time{}
 		temperatureCollectorControl.Unlock()
 		return
 	}
-	temperatureCollectorControl.LastEnsure = time.Now()
+	temperatureCollectorControl.Lock()
+	if temperatureCollectorControl.StaleSince.IsZero() {
+		temperatureCollectorControl.StaleSince = time.Now()
+		temperatureCollectorControl.Unlock()
+		return
+	}
+	staleFor := time.Since(temperatureCollectorControl.StaleSince)
 	temperatureCollectorControl.Unlock()
-	go func() {
-		if !temperatureScheduledTaskExists() {
-			ensureTemperatureScheduledTaskAsync(false)
-			return
-		}
-		if err := runTemperatureScheduledTask(); err != nil {
-			techLog040("temperature collector stale; scheduled restart failed: " + err.Error())
-			ensureTemperatureScheduledTaskAsync(true)
-			launchTemperatureCollectorFallback()
-		}
-	}()
+	if staleFor >= 30*time.Second {
+		quarantineTemperatureCollector(fmt.Sprintf("snapshot stale for %s", staleFor.Round(time.Second)))
+	}
 }
 
 func startTemperatureSampler() {
-	if temperatureProviderBasePresent() {
-		repairTemperatureCollectorAsync()
-		ensureTemperatureScheduledTaskAsync(false)
+	if !app.settings.HardwareSensorsEnabled {
+		disableTemperatureCollectorAsync(true)
+	} else if temperatureProviderBasePresent() {
 		ensureTemperatureCollectorRunningAsync()
 	}
 	temperatureState.Lock()
@@ -1158,6 +1164,9 @@ func temperatureLastUpdated() time.Time {
 }
 
 func sampleElevatedHardwareSensors() []HardwareSensor {
+	if !temperatureMonitoringEnabled() {
+		return nil
+	}
 	p := temperatureProviderSnapshotFile()
 	if p == "" {
 		return nil
@@ -1209,10 +1218,8 @@ func normalizeHardwareSensors(in []HardwareSensor) []HardwareSensor {
 			continue
 		}
 		key := strings.ToLower(strings.TrimSpace(s.Hardware) + "|" + strings.TrimSpace(s.Name) + "|" + strings.TrimSpace(s.SensorType))
-		prev, ok := best[key]
-		// Prefer the broad Full profile when duplicate sensors exist; otherwise keep
-		// the first stable reading. Isolated profiles are diagnostic fallbacks.
-		if !ok || (strings.Contains(strings.ToLower(s.Source), "· full") && !strings.Contains(strings.ToLower(prev.Source), "· full")) {
+		_, ok := best[key]
+		if !ok {
 			best[key] = s
 		}
 	}

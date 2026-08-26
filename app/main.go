@@ -23,7 +23,7 @@ import (
 
 // PowerPilot 0.4.0 - Win32 + Direct2D/DirectWrite, no external runtime.
 
-const appVersion = "0.8.3"
+const appVersion = "0.8.4"
 const normalMinClientW = 640
 const normalMinClientH = 650
 const miniClientW = 500
@@ -588,6 +588,7 @@ type Settings struct {
 	IdleSecondsMigrated           bool                  `json:"idle_seconds_migrated,omitempty"`
 	GlobalHotkeys                 bool                  `json:"global_hotkeys"`
 	TemperatureAutoUpdate         bool                  `json:"temperature_auto_update"`
+	HardwareSensorsEnabled        bool                  `json:"hardware_sensors_enabled"`
 	SavedTasks                    []SavedTask           `json:"saved_tasks"`
 	ScenarioGraph                 ScenarioGraph         `json:"scenario_graph,omitempty"`
 }
@@ -849,6 +850,7 @@ type App struct {
 	appUpdateRect                          RECT
 	appUpdateActionRect                    RECT
 	temperatureAutoUpdateRect              RECT
+	temperatureEnabledRect                 RECT
 	temperatureUpdateActionRect            RECT
 	safetyFullscreenRect                   RECT
 	safetyRecentRect                       RECT
@@ -2166,7 +2168,8 @@ func layoutControlsLogical(rc RECT) {
 				app.temperatureUpdateActionRect = RECT{app.dataRects[5].Right - int32(actionW+12), app.dataRects[5].Top + 25, app.dataRects[5].Right - 12, app.dataRects[5].Bottom - 25}
 				app.appUpdateActionRect = RECT{app.appUpdateRect.Right - int32(actionW+12), app.appUpdateRect.Top + 25, app.appUpdateRect.Right - 12, app.appUpdateRect.Bottom - 25}
 				autoY := int(app.appUpdateRect.Bottom) + 14
-				app.temperatureAutoUpdateRect = RECT{int32(innerLeft), int32(autoY), int32(settingsRight), int32(autoY + 48)}
+				app.temperatureEnabledRect = RECT{int32(innerLeft), int32(autoY + 4), int32(innerLeft + 28), int32(autoY + 32)}
+				app.temperatureAutoUpdateRect = RECT{int32(innerLeft + 40), int32(autoY), int32(settingsRight), int32(autoY + 48)}
 			} else {
 				bw := (settingsContentW - 12) / 2
 				bh := 84
@@ -2176,7 +2179,7 @@ func layoutControlsLogical(rc RECT) {
 					y := contentY + 20 + row*(bh+12)
 					app.dataRects[i] = RECT{int32(x), int32(y), int32(x + bw), int32(y + bh)}
 				}
-				app.appUpdateRect, app.appUpdateActionRect, app.temperatureAutoUpdateRect, app.temperatureUpdateActionRect = RECT{}, RECT{}, RECT{}, RECT{}
+				app.appUpdateRect, app.appUpdateActionRect, app.temperatureAutoUpdateRect, app.temperatureEnabledRect, app.temperatureUpdateActionRect = RECT{}, RECT{}, RECT{}, RECT{}, RECT{}
 			}
 		case 5:
 			row0 := uiSettingsRowTop(contentY, 0)
@@ -4664,8 +4667,14 @@ func drawComponentsSettings(hdc uintptr, body RECT) {
 	updateAction, updateBusy := powerPilotUpdateActionLabel()
 	drawSettingsUpdateCard(hdc, app.appUpdateRect, app.appUpdateActionRect, title, sub, updateAction, updateBusy)
 	if temperatureProviderInstalled() {
+		drawToggle(hdc, app.temperatureEnabledRect, app.settings.HardwareSensorsEnabled)
 		textW := int(app.temperatureAutoUpdateRect.Right - app.temperatureAutoUpdateRect.Left)
-		drawText(hdc, "Датчики: «Ресурсы → Продвинутый монитор → Датчики».", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)+6, textW, 24, 10, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		drawText(hdc, "Аппаратный мониторинг", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)-1, textW, 22, 11, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		detail := "Выключен — фоновый сборщик не запускается."
+		if app.settings.HardwareSensorsEnabled {
+			detail = "Включён · безопасный профиль без AMD GPU."
+		}
+		drawText(hdc, detail, int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)+20, textW, 20, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	}
 }
 
@@ -8507,6 +8516,12 @@ func onClick(x, y int32) {
 		case 3:
 		case 4:
 			if app.settingsCategory == 4 {
+				if temperatureProviderInstalled() && (pointIn(app.temperatureEnabledRect, x, y) || pointIn(app.temperatureAutoUpdateRect, x, y)) {
+					playUI(clickSound)
+					setHardwareSensorsEnabled(!app.settings.HardwareSensorsEnabled)
+					invalidate(app.hwnd)
+					return
+				}
 				if pointIn(app.temperatureUpdateActionRect, x, y) {
 					playUI(clickSound)
 					handleTemperatureProviderUpdateAction()
@@ -11691,6 +11706,11 @@ func loadSettings() Settings {
 		}
 		if !strings.Contains(string(b), "\"temperature_auto_update\"") {
 			s.TemperatureAutoUpdate = true
+		}
+		// Hardware monitoring is a privileged opt-in feature. Existing installations
+		// are deliberately migrated to Off until the user enables the safe collector.
+		if !strings.Contains(string(b), "\"hardware_sensors_enabled\"") {
+			s.HardwareSensorsEnabled = false
 		}
 	}
 	if err != nil {
