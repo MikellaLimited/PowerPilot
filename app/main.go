@@ -589,6 +589,7 @@ type Settings struct {
 	GlobalHotkeys                 bool                  `json:"global_hotkeys"`
 	TemperatureAutoUpdate         bool                  `json:"temperature_auto_update"`
 	HardwareSensorsEnabled        bool                  `json:"hardware_sensors_enabled"`
+	GPUSensorsEnabled             bool                  `json:"gpu_sensors_enabled"`
 	SavedTasks                    []SavedTask           `json:"saved_tasks"`
 	ScenarioGraph                 ScenarioGraph         `json:"scenario_graph,omitempty"`
 }
@@ -851,6 +852,8 @@ type App struct {
 	appUpdateActionRect                    RECT
 	temperatureAutoUpdateRect              RECT
 	temperatureEnabledRect                 RECT
+	gpuSensorsSettingsRect                 RECT
+	gpuSensorsEnabledRect                  RECT
 	temperatureUpdateActionRect            RECT
 	safetyFullscreenRect                   RECT
 	safetyRecentRect                       RECT
@@ -1169,6 +1172,9 @@ func loword(v uintptr) int    { return int(v & 0xFFFF) }
 func hiword(v uintptr) int    { return int((v >> 16) & 0xFFFF) }
 
 func main() {
+	if handleGPUSensorProbeCommand() {
+		return
+	}
 	if handleTemperatureAdminCommand() {
 		return
 	}
@@ -2170,6 +2176,9 @@ func layoutControlsLogical(rc RECT) {
 				autoY := int(app.appUpdateRect.Bottom) + 14
 				app.temperatureEnabledRect = RECT{int32(innerLeft), int32(autoY + 4), int32(innerLeft + 28), int32(autoY + 32)}
 				app.temperatureAutoUpdateRect = RECT{int32(innerLeft + 40), int32(autoY), int32(settingsRight), int32(autoY + 48)}
+				gpuY := autoY + 58
+				app.gpuSensorsEnabledRect = RECT{int32(innerLeft), int32(gpuY + 4), int32(innerLeft + 28), int32(gpuY + 32)}
+				app.gpuSensorsSettingsRect = RECT{int32(innerLeft + 40), int32(gpuY), int32(settingsRight), int32(gpuY + 48)}
 			} else {
 				bw := (settingsContentW - 12) / 2
 				bh := 84
@@ -2179,7 +2188,7 @@ func layoutControlsLogical(rc RECT) {
 					y := contentY + 20 + row*(bh+12)
 					app.dataRects[i] = RECT{int32(x), int32(y), int32(x + bw), int32(y + bh)}
 				}
-				app.appUpdateRect, app.appUpdateActionRect, app.temperatureAutoUpdateRect, app.temperatureEnabledRect, app.temperatureUpdateActionRect = RECT{}, RECT{}, RECT{}, RECT{}, RECT{}
+				app.appUpdateRect, app.appUpdateActionRect, app.temperatureAutoUpdateRect, app.temperatureEnabledRect, app.gpuSensorsSettingsRect, app.gpuSensorsEnabledRect, app.temperatureUpdateActionRect = RECT{}, RECT{}, RECT{}, RECT{}, RECT{}, RECT{}, RECT{}
 			}
 		case 5:
 			row0 := uiSettingsRowTop(contentY, 0)
@@ -4672,10 +4681,14 @@ func drawComponentsSettings(hdc uintptr, body RECT) {
 		drawText(hdc, "Аппаратный мониторинг", int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)-1, textW, 22, 11, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 		detail := "Выключен — фоновый сборщик не запускается."
 		if app.settings.HardwareSensorsEnabled {
-			detail = "Включён · безопасный профиль без AMD GPU."
+			detail = "Включён · минимальный профиль CPU и накопителей."
 		}
 		drawText(hdc, detail, int(app.temperatureAutoUpdateRect.Left), int(app.temperatureAutoUpdateRect.Top)+20, textW, 20, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	}
+	drawToggle(hdc, app.gpuSensorsEnabledRect, app.settings.GPUSensorsEnabled)
+	gpuTextW := int(app.gpuSensorsSettingsRect.Right - app.gpuSensorsSettingsRect.Left)
+	drawText(hdc, "Расширенные датчики GPU", int(app.gpuSensorsSettingsRect.Left), int(app.gpuSensorsSettingsRect.Top)-1, gpuTextW, 22, 11, 600, theme.text, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	drawText(hdc, gpuSensorSettingsDetail(), int(app.gpuSensorsSettingsRect.Left), int(app.gpuSensorsSettingsRect.Top)+20, gpuTextW, 20, 9, 400, theme.muted, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 }
 
 func drawSafetySettings(hdc uintptr, body RECT) {
@@ -8516,6 +8529,12 @@ func onClick(x, y int32) {
 		case 3:
 		case 4:
 			if app.settingsCategory == 4 {
+				if pointIn(app.gpuSensorsEnabledRect, x, y) || pointIn(app.gpuSensorsSettingsRect, x, y) {
+					playUI(clickSound)
+					setGPUSensorsEnabled(!app.settings.GPUSensorsEnabled)
+					invalidate(app.hwnd)
+					return
+				}
 				if temperatureProviderInstalled() && (pointIn(app.temperatureEnabledRect, x, y) || pointIn(app.temperatureAutoUpdateRect, x, y)) {
 					playUI(clickSound)
 					setHardwareSensorsEnabled(!app.settings.HardwareSensorsEnabled)
@@ -11711,6 +11730,11 @@ func loadSettings() Settings {
 		// are deliberately migrated to Off until the user enables the safe collector.
 		if !strings.Contains(string(b), "\"hardware_sensors_enabled\"") {
 			s.HardwareSensorsEnabled = false
+		}
+		// Vendor GPU telemetry is deliberately a separate explicit opt-in. It runs
+		// outside the main process and must never be enabled by a settings migration.
+		if !strings.Contains(string(b), "\"gpu_sensors_enabled\"") {
+			s.GPUSensorsEnabled = false
 		}
 	}
 	if err != nil {

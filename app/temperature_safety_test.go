@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 func TestHardwareSensorsAreExplicitOptIn(t *testing.T) {
@@ -28,6 +29,16 @@ func TestHardwareSensorsAreExplicitOptIn(t *testing.T) {
 	}
 	if !optedIn.HardwareSensorsEnabled {
 		t.Fatal("explicit opt-in was not preserved")
+	}
+	if migrated.GPUSensorsEnabled || optedIn.GPUSensorsEnabled {
+		t.Fatal("GPU vendor sensors must remain a separate explicit opt-in")
+	}
+	var gpuOptedIn Settings
+	if err := json.Unmarshal([]byte(`{"gpu_sensors_enabled":true}`), &gpuOptedIn); err != nil {
+		t.Fatal(err)
+	}
+	if !gpuOptedIn.GPUSensorsEnabled {
+		t.Fatal("explicit GPU sensor opt-in was not preserved")
 	}
 }
 
@@ -55,6 +66,10 @@ func TestCollectorSourceUsesSafeLifecycle(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		"IsGpuEnabled = true",
+		"IsMotherboardEnabled = true",
+		"IsControllerEnabled = true",
+		"IsPsuEnabled = true",
+		"IsPowerMonitorEnabled = true",
 		"Thread.Sleep(1400)",
 		"File.Delete(path)",
 	} {
@@ -63,6 +78,9 @@ func TestCollectorSourceUsesSafeLifecycle(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
+		`OpenProfile("Minimal"`,
+		"c.IsCpuEnabled = true",
+		"c.IsStorageEnabled = true",
 		"p.Computer.Close()",
 		"File.Replace(tmp, path, null, true)",
 		"SnapshotPublished",
@@ -72,6 +90,27 @@ func TestCollectorSourceUsesSafeLifecycle(t *testing.T) {
 		if !strings.Contains(src, required) {
 			t.Fatalf("collector is missing safety mechanism %q", required)
 		}
+	}
+}
+
+func TestGPUSensorSafetyGatesAndTemperatureNormalization(t *testing.T) {
+	if !gpuSensorsMayRun(true, false) || gpuSensorsMayRun(false, false) || gpuSensorsMayRun(true, true) {
+		t.Fatal("GPU sensor opt-in/quarantine gates are incorrect")
+	}
+	if !shouldQuarantineGPUSensorProbe(gpuSensorFailureLimit) || shouldQuarantineGPUSensorProbe(gpuSensorFailureLimit-1) {
+		t.Fatal("GPU probe circuit breaker threshold is incorrect")
+	}
+	if got, ok := normalizeADLTemperature(65000); !ok || got != 65 {
+		t.Fatalf("ADL millidegrees were not normalized: %.2f, %v", got, ok)
+	}
+	if _, ok := normalizeADLTemperature(0); ok {
+		t.Fatal("invalid ADL temperature was accepted")
+	}
+	if !isVendorGPUSource("AMD ADL (isolated)", "AMD") || isVendorGPUSource("AMD ADL (isolated)", "NVIDIA") {
+		t.Fatal("GPU vendor separation is incorrect")
+	}
+	if got := unsafe.Sizeof(adlPMLogDataOutput{}); got != 2052 {
+		t.Fatalf("AMD ADL PMLog ABI changed: got %d bytes", got)
 	}
 }
 

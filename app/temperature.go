@@ -127,7 +127,7 @@ func temperatureProviderRuntimeDir() string {
 	return root
 }
 
-const temperatureCollectorRevision = "10-safe"
+const temperatureCollectorRevision = "11-minimal"
 const temperatureBundledProviderVersion = "0.9.7-pre724+825dc3d"
 const temperatureBundledProviderRevision = "1"
 const pawnIOVersion = "2.2.0"
@@ -447,6 +447,10 @@ func temperatureMonitoringEnabled() bool {
 	return hardwareSensorsMayRun(app.settings.HardwareSensorsEnabled, temperatureProviderBasePresent(), temperatureCollectorQuarantined())
 }
 
+func temperatureDisplayEnabled() bool {
+	return temperatureMonitoringEnabled() || gpuSensorsMayRun(app.settings.GPUSensorsEnabled, gpuSensorProbeQuarantined())
+}
+
 func hardwareSensorsMayRun(enabled, providerPresent, quarantined bool) bool {
 	return enabled && providerPresent && !quarantined
 }
@@ -481,7 +485,7 @@ func temperatureProviderStatus() (bool, string) {
 		return false, lastErr
 	}
 	if temperatureProviderNeedsRepair() {
-		return false, "Требуется обновить компоненты датчиков (низкоуровневый доступ CPU/платы)"
+		return false, "Требуется обновить компоненты датчиков (минимальный профиль CPU/накопителей)"
 	}
 	if temperatureProviderInstalled() {
 		v := temperatureProviderInstalledVersion()
@@ -593,14 +597,12 @@ internal static class Program {
 
     private static List<Profile> OpenProfiles() {
         List<Profile> profiles = new List<Profile>();
-        // One Computer owns every enabled hardware group. AMD GPU discovery is
-        // intentionally excluded: load/VRAM continue to come from Windows counters,
-        // while ADL/DXCore polling is isolated from the default sensor path.
-        profiles.Add(OpenProfile("Safe", delegate(Computer c) {
-            c.IsCpuEnabled = true; c.IsMemoryEnabled = true;
-            c.IsMotherboardEnabled = true; c.IsControllerEnabled = true;
-            c.IsStorageEnabled = true; c.IsPsuEnabled = true; c.IsPowerMonitorEnabled = true;
-            c.IsBatteryEnabled = true;
+        // The persistent low-level profile is intentionally minimal. GPU telemetry
+        // has a separate short-lived vendor process; motherboard/EC/controllers are
+        // excluded because Windows already supplies the ordinary resource metrics.
+        profiles.Add(OpenProfile("Minimal", delegate(Computer c) {
+            c.IsCpuEnabled = true;
+            c.IsStorageEnabled = true;
         }));
         return profiles;
     }
@@ -1244,7 +1246,7 @@ func sampleTemperatures() {
 	// Temperatures are opt-in: before the user installs the provider, show none.
 	// Once the payload exists, however, a broken/stale elevated collector must not
 	// blank vendor/Windows fallback temperatures as happened in 0.6.8/0.6.9.
-	if !temperatureMonitoringEnabled() {
+	if !temperatureDisplayEnabled() {
 		temperatureState.Lock()
 		temperatureState.Sensors = nil
 		temperatureState.Updated = time.Time{}
@@ -1256,8 +1258,11 @@ func sampleTemperatures() {
 		return
 	}
 
-	ensureTemperatureCollectorRunningAsync()
-	hardwareSensors := sampleElevatedHardwareSensors()
+	hardwareSensors := []HardwareSensor{}
+	if temperatureMonitoringEnabled() {
+		ensureTemperatureCollectorRunningAsync()
+		hardwareSensors = sampleElevatedHardwareSensors()
+	}
 	sensors := make([]TemperatureSensor, 0, len(hardwareSensors))
 	for _, hs := range hardwareSensors {
 		if strings.EqualFold(hs.SensorType, "Temperature") && hs.Value > 1 && hs.Value <= 170 && !math.IsNaN(hs.Value) && !math.IsInf(hs.Value, 0) {
@@ -1267,15 +1272,11 @@ func sampleTemperatures() {
 	// Merge complementary Windows/LHM/ACPI/storage sources even when the elevated
 	// collector returned some sensors. 0.6.12 skipped this entire branch as soon as
 	// one LHM temperature existed, which hid additional storage/thermal-zone values.
-	sensors = append(sensors, sampleWindowsTemperatureSensorsCached()...)
-	nv := sampleNVMLTemperatureSensors()
-	sensors = append(sensors, nv...)
-	if len(nv) == 0 {
-		nv = sampleNVAPITemperatureSensors()
-		sensors = append(sensors, nv...)
+	if temperatureMonitoringEnabled() {
+		sensors = append(sensors, sampleWindowsTemperatureSensorsCached()...)
 	}
-	if len(nv) == 0 {
-		sensors = append(sensors, sampleNvidiaSMITemperatureSensors()...)
+	if gpuSensorsMayRun(app.settings.GPUSensorsEnabled, gpuSensorProbeQuarantined()) {
+		sensors = append(sensors, sampleIsolatedVendorGPUTemperatures()...)
 	}
 	sensors = normalizeTemperatureSensors(sensors)
 	// Surface complementary fallback temperatures in the generic sensor browser as
@@ -1409,7 +1410,7 @@ $out | ConvertTo-Json -Compress -Depth 3`
 }
 
 func sampleNVMLTemperatureSensors() []TemperatureSensor {
-	candidates := []string{"nvml.dll"}
+	candidates := []string{}
 	if root := os.Getenv("SystemRoot"); root != "" {
 		candidates = append(candidates, filepath.Join(root, "System32", "nvml.dll"))
 	}
@@ -1508,7 +1509,7 @@ func sampleNVAPITemperatureSensors() []TemperatureSensor {
 	// NVAPI is installed with the NVIDIA display driver and is independent of NVML.
 	// Some consumer-driver installations expose nvapi64.dll but not nvml.dll or
 	// nvidia-smi, so this gives PowerPilot a third direct NVIDIA temperature path.
-	candidates := []string{"nvapi64.dll"}
+	candidates := []string{}
 	if root := os.Getenv("SystemRoot"); root != "" {
 		candidates = append(candidates, filepath.Join(root, "System32", "nvapi64.dll"))
 	}
@@ -1602,9 +1603,6 @@ func sampleNVAPIFromDLL(dll *syscall.DLL) []TemperatureSensor {
 
 func sampleNvidiaSMITemperatureSensors() []TemperatureSensor {
 	paths := []string{}
-	if p, err := exec.LookPath("nvidia-smi.exe"); err == nil {
-		paths = append(paths, p)
-	}
 	if root := os.Getenv("SystemRoot"); root != "" {
 		paths = append(paths, filepath.Join(root, "System32", "nvidia-smi.exe"))
 	}

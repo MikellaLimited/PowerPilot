@@ -499,7 +499,7 @@ func hardwareSensorValueText(s HardwareSensor, which int) string {
 }
 
 func drawAdvancedSensorMonitor(hdc uintptr, body RECT) {
-	if !temperatureMonitoringEnabled() {
+	if !temperatureDisplayEnabled() {
 		drawText(hdc, "Аппаратные датчики отключены", int(body.Right)-280, int(body.Top)+16, 260, 18, 9, 600, theme.muted, DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
 		drawText(hdc, "Установите аппаратные датчики в Настройки → Данные. До установки PowerPilot не публикует низкоуровневые показатели компонентов.", int(app.resourceProcListClip.Left)+12, int(app.resourceProcListClip.Top)+28, int(app.resourceProcListClip.Right-app.resourceProcListClip.Left)-24, 70, 11, 450, theme.muted, DT_LEFT|DT_VCENTER|DT_WORDBREAK)
 		return

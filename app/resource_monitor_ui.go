@@ -124,7 +124,7 @@ func drawResourceMonitor(hdc uintptr, body RECT, w int) {
 }
 
 func averageTemperatureValueText(kind string) string {
-	if !temperatureMonitoringEnabled() {
+	if !temperatureDisplayEnabled() {
 		return ""
 	}
 	v := averageTemperature(kind)

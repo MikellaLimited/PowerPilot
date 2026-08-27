@@ -308,7 +308,7 @@ func validateCollectorOnce(exe, runtimeDir string) error {
 	if !status.SnapshotPublished {
 		return fmt.Errorf("новый коллектор не смог безопасно опубликовать снимок")
 	}
-	if len(status.Profiles) != 1 || status.Profiles[0].Name != "Safe" || !status.Profiles[0].OK {
+	if len(status.Profiles) != 1 || status.Profiles[0].Name != "Minimal" || !status.Profiles[0].OK {
 		return fmt.Errorf("новый коллектор не прошёл проверку безопасного профиля")
 	}
 	return nil
