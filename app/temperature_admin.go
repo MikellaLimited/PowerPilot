@@ -37,7 +37,7 @@ func temperatureAdminResultFile(action string) string {
 	if root == "" {
 		return ""
 	}
-	if action == "task-repair" {
+	if action == "task-repair" || action == "task-disable" {
 		return filepath.Join(root, "sensor_task_result.json")
 	}
 	return filepath.Join(root, "sensor_update_result.json")
@@ -69,6 +69,8 @@ func handleTemperatureAdminCommand() bool {
 		action = "update"
 	case "--sensor-admin-task-repair":
 		action = "task-repair"
+	case "--sensor-admin-task-disable":
+		action = "task-disable"
 	default:
 		return false
 	}
@@ -76,8 +78,11 @@ func handleTemperatureAdminCommand() bool {
 	var err error
 	if action == "update" {
 		runtimeDir, err = nativeTemperatureProviderUpdate()
-	} else {
+	} else if action == "task-repair" {
 		err = nativeTemperatureTaskRepair()
+		runtimeDir = temperatureProviderRuntimeDir()
+	} else {
+		err = nativeTemperatureTaskDisable()
 		runtimeDir = temperatureProviderRuntimeDir()
 	}
 	step := "done"
@@ -102,6 +107,8 @@ func runElevatedTemperatureHelper(action string, timeout time.Duration) error {
 	arg := "--sensor-admin-update"
 	if action == "task-repair" {
 		arg = "--sensor-admin-task-repair"
+	} else if action == "task-disable" {
+		arg = "--sensor-admin-task-disable"
 	}
 
 	shellExecuteW := syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
@@ -217,6 +224,8 @@ func compileTemperatureCollectorAt(runtimeDir string) error {
 }
 
 func stopTemperatureTaskAndCollectors() {
+	signalTemperatureCollectorStop()
+	time.Sleep(1200 * time.Millisecond)
 	_, _ = runSchtasks("/End", "/TN", temperatureTaskName)
 	cmd := exec.Command("taskkill.exe", "/IM", "PowerPilotSensors.exe", "/F")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
@@ -234,6 +243,7 @@ func registerTemperatureTaskNative(exe, root string) error {
 	}
 	_, _ = runSchtasks("/End", "/TN", temperatureTaskName)
 	_, _ = runSchtasks("/Delete", "/TN", temperatureTaskName, "/F")
+	_ = os.Remove(filepath.Join(root, "collector_quarantine.flag"))
 	tr := scheduledTaskCommand(exe, root)
 	out, err := runSchtasks("/Create", "/TN", temperatureTaskName, "/TR", tr, "/SC", "ONLOGON", "/RL", "HIGHEST", "/F")
 	if err != nil {
@@ -262,7 +272,7 @@ func validateCollectorOnce(exe, runtimeDir string) error {
 	defer os.RemoveAll(testDir)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, "--once", "--output-dir", testDir)
+	cmd := exec.CommandContext(ctx, exe, "--once", "--probe-cycles=5", "--output-dir", testDir)
 	cmd.Dir = runtimeDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	if err := cmd.Run(); err != nil {
@@ -274,8 +284,13 @@ func validateCollectorOnce(exe, runtimeDir string) error {
 		return fmt.Errorf("пробный запуск нового коллектора завершился ошибкой: %s", msg)
 	}
 	var status struct {
-		SensorCount int    `json:"SensorCount"`
-		Fatal       string `json:"Fatal"`
+		SensorCount       int    `json:"SensorCount"`
+		SnapshotPublished bool   `json:"SnapshotPublished"`
+		Fatal             string `json:"Fatal"`
+		Profiles          []struct {
+			Name string `json:"Name"`
+			OK   bool   `json:"OK"`
+		} `json:"Profiles"`
 	}
 	raw, err := os.ReadFile(filepath.Join(testDir, "collector_status.json"))
 	if err != nil {
@@ -289,6 +304,12 @@ func validateCollectorOnce(exe, runtimeDir string) error {
 	}
 	if status.SensorCount <= 0 {
 		return fmt.Errorf("новый коллектор запустился, но не обнаружил ни одного температурного датчика")
+	}
+	if !status.SnapshotPublished {
+		return fmt.Errorf("новый коллектор не смог безопасно опубликовать снимок")
+	}
+	if len(status.Profiles) != 1 || status.Profiles[0].Name != "Minimal" || !status.Profiles[0].OK {
+		return fmt.Errorf("новый коллектор не прошёл проверку безопасного профиля")
 	}
 	return nil
 }
@@ -376,11 +397,7 @@ func nativeTemperatureProviderUpdate() (string, error) {
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return "", err
 	}
-	oldRuntime := temperatureProviderRuntimeDir()
-	oldExe := ""
-	if oldRuntime != "" {
-		oldExe = filepath.Join(oldRuntime, "PowerPilotSensors.exe")
-	}
+	enabled := loadSettings().HardwareSensorsEnabled
 
 	stageName := "runtime_0.9.7-pre724_825dc3d_" + time.Now().UTC().Format("20060102_150405")
 	stage := filepath.Join(root, stageName)
@@ -397,27 +414,12 @@ func nativeTemperatureProviderUpdate() (string, error) {
 
 	stopTemperatureTaskAndCollectors()
 	newExe := filepath.Join(stage, "PowerPilotSensors.exe")
-	if err := validateCollectorOnce(newExe, stage); err != nil {
-		if oldExe != "" {
-			_ = registerTemperatureTaskNative(oldExe, root)
+	if enabled {
+		if err := validateCollectorOnce(newExe, stage); err != nil {
+			_ = os.WriteFile(filepath.Join(root, "collector_quarantine.flag"), []byte("collector validation failed\n"+err.Error()+"\n"), 0644)
+			_ = nativeTemperatureTaskDisable()
+			return stage, fmt.Errorf("этап проверки: %w", err)
 		}
-		return stage, fmt.Errorf("этап проверки: %w", err)
-	}
-
-	started := time.Now()
-	_ = os.Remove(filepath.Join(root, "sensors.json"))
-	_ = os.Remove(filepath.Join(root, "collector_status.json"))
-	if err := registerTemperatureTaskNative(newExe, root); err != nil {
-		if oldExe != "" {
-			_ = registerTemperatureTaskNative(oldExe, root)
-		}
-		return stage, fmt.Errorf("этап Планировщика заданий: %w", err)
-	}
-	if err := waitForFreshCollectorOutput(root, started); err != nil {
-		if oldExe != "" {
-			_ = registerTemperatureTaskNative(oldExe, root)
-		}
-		return stage, fmt.Errorf("этап запуска: %w", err)
 	}
 
 	if err := os.WriteFile(filepath.Join(root, "active_provider_dir.txt"), []byte(stageName), 0644); err != nil {
@@ -426,10 +428,32 @@ func nativeTemperatureProviderUpdate() (string, error) {
 	_ = os.WriteFile(filepath.Join(root, "version.txt"), []byte(temperatureBundledProviderVersion), 0644)
 	_ = os.WriteFile(filepath.Join(root, "provider_bundle_revision.txt"), []byte(temperatureBundledProviderRevision), 0644)
 	_ = os.WriteFile(filepath.Join(root, "provider_source.txt"), []byte("LibreHardwareMonitor official master CI\ncommit=825dc3de36c5816bb2a8b10b309244a8c362a7f9\nversion=0.9.7-pre724\nworkflow_run=31707859588\n"), 0644)
+
+	if !enabled {
+		_ = nativeTemperatureTaskDisable()
+		return stage, nil
+	}
+
+	started := time.Now()
+	_ = os.Remove(filepath.Join(root, "sensors.json"))
+	_ = os.Remove(filepath.Join(root, "collector_status.json"))
+	if err := registerTemperatureTaskNative(newExe, root); err != nil {
+		_ = os.WriteFile(filepath.Join(root, "collector_quarantine.flag"), []byte("collector task start failed\n"+err.Error()+"\n"), 0644)
+		_ = nativeTemperatureTaskDisable()
+		return stage, fmt.Errorf("этап Планировщика заданий: %w", err)
+	}
+	if err := waitForFreshCollectorOutput(root, started); err != nil {
+		_ = os.WriteFile(filepath.Join(root, "collector_quarantine.flag"), []byte("collector output timeout\n"+err.Error()+"\n"), 0644)
+		_ = nativeTemperatureTaskDisable()
+		return stage, fmt.Errorf("этап запуска: %w", err)
+	}
 	return stage, nil
 }
 
 func nativeTemperatureTaskRepair() error {
+	if !loadSettings().HardwareSensorsEnabled {
+		return fmt.Errorf("аппаратный мониторинг выключен пользователем")
+	}
 	root := temperatureProviderDir()
 	runtimeDir := temperatureProviderRuntimeDir()
 	if root == "" || runtimeDir == "" {
@@ -440,10 +464,34 @@ func nativeTemperatureTaskRepair() error {
 		return fmt.Errorf("PowerPilotSensors.exe отсутствует: %v", err)
 	}
 	stopTemperatureTaskAndCollectors()
+	clearTemperatureCollectorQuarantine()
 	if err := registerTemperatureTaskNative(exe, root); err != nil {
+		_ = os.WriteFile(filepath.Join(root, "collector_quarantine.flag"), []byte("collector task repair failed\n"+err.Error()+"\n"), 0644)
+		_ = nativeTemperatureTaskDisable()
 		return err
 	}
-	return waitForFreshCollectorOutput(root, time.Now().Add(-time.Second))
+	if err := waitForFreshCollectorOutput(root, time.Now().Add(-time.Second)); err != nil {
+		_ = os.WriteFile(filepath.Join(root, "collector_quarantine.flag"), []byte("collector task output timeout\n"+err.Error()+"\n"), 0644)
+		_ = nativeTemperatureTaskDisable()
+		return err
+	}
+	return nil
+}
+
+func nativeTemperatureTaskDisable() error {
+	stopTemperatureTaskAndCollectors()
+	if !temperatureScheduledTaskExists() {
+		return nil
+	}
+	out, err := runSchtasks("/Change", "/TN", temperatureTaskName, "/DISABLE")
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("не удалось отключить задачу датчиков: %s", msg)
+	}
+	return nil
 }
 
 // Native GitHub release check: no PowerShell process is needed just to learn the
